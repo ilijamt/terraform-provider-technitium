@@ -1,0 +1,1 @@
+terraform import technitium_settings_recursion.this settings_recursion

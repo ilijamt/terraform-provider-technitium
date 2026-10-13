@@ -1,0 +1,1 @@
+terraform import technitium_settings_proxy_forwarders.this settings_proxy_forwarders

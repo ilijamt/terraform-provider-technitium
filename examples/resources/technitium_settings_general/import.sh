@@ -1,0 +1,1 @@
+terraform import technitium_settings_general.this settings_general

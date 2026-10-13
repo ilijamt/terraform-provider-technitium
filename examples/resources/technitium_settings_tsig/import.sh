@@ -1,0 +1,1 @@
+terraform import technitium_settings_tsig.this settings_tsig

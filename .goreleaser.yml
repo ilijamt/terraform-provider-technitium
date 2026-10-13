@@ -1,0 +1,66 @@
+version: 2
+before:
+  hooks:
+  - go mod tidy
+report_sizes: true
+builds:
+- main: ./main.go
+  env:
+  - CGO_ENABLED=0
+  mod_timestamp: '{{ .CommitTimestamp }}'
+  flags:
+  - -trimpath
+  # -X needs the full import path; a bare "version.Version" silently no-ops.
+  ldflags:
+  - '-s -w'
+  - '-X "github.com/ilijamt/terraform-provider-technitium/version.Version={{.Version}}"'
+  - '-X "github.com/ilijamt/terraform-provider-technitium/version.Commit={{.Commit}}"'
+  goos:
+  - freebsd
+  - windows
+  - linux
+  - darwin
+  goarch:
+  - amd64
+  - '386'
+  - arm
+  - arm64
+  ignore:
+  - goos: darwin
+    goarch: '386'
+  binary: '{{ .ProjectName }}_v{{ .Version }}-{{ .ShortCommit }}'
+archives:
+- formats: [ 'zip' ]
+  name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+checksum:
+  extra_files:
+  - glob: 'terraform-registry-manifest.json'
+    name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+signs:
+- artifacts: checksum
+  args:
+  - "--batch"
+  - "--local-user"
+  - "{{ .Env.GPG_FINGERPRINT }}" # set this environment variable for your signing key
+  - "--output"
+  - "${signature}"
+  - "--detach-sign"
+  - "${artifact}"
+release:
+  # Published by the release workflow only after every asset is uploaded, so the
+  # Terraform Registry sees a complete release on its single webhook scan.
+  draft: true
+  # A failed run leaves the draft behind; let a re-run of the same tag reclaim it.
+  replace_existing_draft: true
+  extra_files:
+  - glob: 'terraform-registry-manifest.json'
+    name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+changelog:
+  sort: asc
+  filters:
+    exclude:
+    - '^docs:'
+    - '^test:'
+    - '^chore:'
