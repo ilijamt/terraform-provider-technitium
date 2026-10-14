@@ -51,6 +51,8 @@ type Column struct {
 	Type        Type
 	Sensitive   bool
 	Description string
+	// Pattern is a regular expression a String value must match.
+	Pattern string
 }
 
 type Attr struct {
@@ -62,6 +64,9 @@ type Attr struct {
 	Type        Type
 	Description string
 	Enum        []string
+	// Pattern is a regular expression a String value must match, for values
+	// the server would store in another spelling.
+	Pattern string
 	// Columns are the row layout of a Table, in parameter order.
 	Columns []Column
 

@@ -10,12 +10,13 @@ STAMP := -X $(MODULE)/version.Version=$(GIT_VERSION) -X $(MODULE)/version.Commit
 # Renders the docs from the resource schemas and examples/.
 .PHONY: generate
 generate:
-	go tool tfplugindocs generate --provider-name technitium --provider-dir .
+	go tool tfplugindocs generate --provider-name technitium --provider-dir ./cmd/provider \
+		--examples-dir ../../examples --rendered-website-dir ../../docs
 
 .PHONY: build
 build:
 	@mkdir -p build
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w $(STAMP)" -o $(BIN) .
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w $(STAMP)" -o $(BIN) ./cmd/provider
 
 .PHONY: test
 test:

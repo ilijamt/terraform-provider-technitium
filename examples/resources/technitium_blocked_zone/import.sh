@@ -1,0 +1,1 @@
+terraform import technitium_blocked_zone.tracker tracker.example.com

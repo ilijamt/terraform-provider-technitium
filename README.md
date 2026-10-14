@@ -28,6 +28,9 @@ Resources:
 - one `technitium_record_<type>` per record type: A, AAAA, NS, CNAME, PTR, MX,
   TXT, RP, SRV, NAPTR, DNAME, DS, SSHFP, TLSA, SVCB, HTTPS, URI, CAA, ANAME, FWD
   and APP
+- `technitium_dhcp_scope`, and `technitium_dhcp_reserved_lease` for each reserved address
+- `technitium_allowed_zone` and `technitium_blocked_zone` for domains to allow or block
+- `technitium_user`, `technitium_group` and `technitium_permissions` for access to the web console and API
 - one `technitium_settings_<area>` per tab of the Settings page: general,
   web_service, optional_protocols, tsig, recursion, cache, blocking,
   proxy_forwarders and logging. Each manages only its own settings.

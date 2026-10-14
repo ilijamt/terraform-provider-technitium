@@ -10,6 +10,7 @@ import (
 // Specs returns the resource specs.
 func Specs() []framework.Spec {
 	specs := append([]framework.Spec{zone, recordSOA}, records...)
+	specs = append(specs, dhcpScope, dhcpReservedLease, allowedZone, blockedZone, user, group, permissions)
 	return append(specs, settings...)
 }
 

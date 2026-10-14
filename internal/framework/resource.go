@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -149,7 +150,7 @@ func (r *Resource) attribute(a Attr) schema.Attribute {
 	if keep {
 		pm = append(pm, stringplanmodifier.UseStateForUnknown())
 	}
-	var v []validator.String
+	v := pattern(a.Pattern)
 	if len(a.Enum) > 0 {
 		v = append(v, stringvalidator.OneOf(a.Enum...))
 	}
@@ -168,10 +169,17 @@ func columns(cols []Column) map[string]schema.Attribute {
 		case List:
 			out[c.Name] = schema.ListAttribute{ElementType: types.StringType, Required: true, Sensitive: c.Sensitive, Description: c.Description}
 		default:
-			out[c.Name] = schema.StringAttribute{Required: true, Sensitive: c.Sensitive, Description: c.Description}
+			out[c.Name] = schema.StringAttribute{Required: true, Sensitive: c.Sensitive, Description: c.Description, Validators: pattern(c.Pattern)}
 		}
 	}
 	return out
+}
+
+func pattern(p string) []validator.String {
+	if p == "" {
+		return nil
+	}
+	return []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(p), "must match "+p)}
 }
 
 func (r *Resource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

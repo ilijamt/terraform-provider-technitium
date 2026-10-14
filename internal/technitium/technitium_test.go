@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -789,6 +790,297 @@ resource "technitium_record_app" "www" {
 				ResourceName:      "technitium_record_app.www",
 				ImportState:       true,
 				ImportStateId:     "app.test/www.app.test",
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccDHCP(t *testing.T) {
+	scope := func(end, extra string) string {
+		return fmt.Sprintf(`
+resource "technitium_dhcp_scope" "lan" {
+  name             = "lan"
+  starting_address = "192.168.50.10"
+  ending_address   = "%s"
+  subnet_mask      = "255.255.255.0"
+  router_address   = "192.168.50.1"
+  dns_servers      = ["192.168.50.2", "192.168.50.3"]
+  domain_name      = "lan.test"
+  %s
+}
+`, end, extra)
+	}
+	tables := `
+  exclusions      = [{ starting_address = "192.168.50.10", ending_address = "192.168.50.20" }]
+  static_routes   = [{ destination = "172.16.0.0", subnet_mask = "255.255.0.0", router = "192.168.50.254" }]
+  generic_options = [{ code = 150, value = "C0:A8:32:05" }]
+  vendor_info     = [{ identifier = "PXEClient", information = "06:01:03" }]
+`
+	lease := func(mac string) string {
+		return fmt.Sprintf(`
+resource "technitium_dhcp_reserved_lease" "printer" {
+  scope            = technitium_dhcp_scope.lan.name
+  hardware_address = "%s"
+  ip_address       = "192.168.50.100"
+  host_name        = "printer"
+  comments         = "office"
+}
+`, mac)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy: func(*terraform.State) error {
+			c, err := login()
+			if err != nil {
+				return err
+			}
+			if _, err = c.Call(context.Background(), "/api/dhcp/scopes/get", url.Values{"name": {"lan"}}); err == nil {
+				return fmt.Errorf("scope lan still exists")
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config:      scope("192.168.50.200", "") + lease("00:11:22:aa:bb:cc"),
+				ExpectError: regexp.MustCompile(`must match`),
+			},
+			{
+				Config: scope("192.168.50.200", tables) + lease("00-11-22-AA-BB-CC"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "dns_servers.#", "2"),
+					resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "exclusions.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("technitium_dhcp_scope.lan", "generic_options.*", map[string]string{"code": "150", "value": "C0:A8:32:05"}),
+					resource.TestCheckResourceAttrSet("technitium_dhcp_scope.lan", "lease_time_days"),
+					resource.TestCheckResourceAttr("technitium_dhcp_reserved_lease.printer", "ip_address", "192.168.50.100"),
+				),
+			},
+			{
+				// The range changes in place and keeps the reservation.
+				Config: scope("192.168.50.150", tables) + lease("00-11-22-AA-BB-CC"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("technitium_dhcp_scope.lan", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("technitium_dhcp_reserved_lease.printer", plancheck.ResourceActionNoop),
+					},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "ending_address", "192.168.50.150"),
+			},
+			{
+				// A change made behind Terraform's back shows up as drift.
+				PreConfig: func() {
+					call(t, api(t), "/api/dhcp/scopes/set", url.Values{"name": {"lan"}, "dnsServers": {"192.168.50.9"}})
+				},
+				Config: scope("192.168.50.150", tables) + lease("00-11-22-AA-BB-CC"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_dhcp_scope.lan", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "dns_servers.#", "2"),
+			},
+			{
+				ResourceName:      "technitium_dhcp_scope.lan",
+				ImportState:       true,
+				ImportStateId:     "lan",
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "technitium_dhcp_reserved_lease.printer",
+				ImportState:       true,
+				ImportStateId:     "lan/00-11-22-AA-BB-CC",
+				ImportStateVerify: true,
+			},
+			{
+				Config: scope("192.168.50.150", `
+  exclusions      = []
+  static_routes   = []
+  generic_options = []
+  vendor_info     = []
+`) + lease("00-11-22-AA-BB-CC"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "exclusions.#", "0"),
+					resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "generic_options.#", "0"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAllowedAndBlockedZones(t *testing.T) {
+	config := func(blocked string) string {
+		return fmt.Sprintf(`
+resource "technitium_blocked_zone" "ads" {
+  domain = "%s"
+}
+
+resource "technitium_allowed_zone" "cdn" {
+  domain = "cdn.ads.block.test"
+}
+`, blocked)
+	}
+	listed := func(kind, domain string) bool {
+		resp := call(t, api(t), "/api/"+kind+"/list", url.Values{"domain": {domain}})
+		for _, r := range resp["records"].([]any) {
+			if r.(map[string]any)["name"] == domain {
+				return true
+			}
+		}
+		return false
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy: func(*terraform.State) error {
+			for kind, domain := range map[string]string{"blocked": "tracker.block.test", "allowed": "cdn.ads.block.test"} {
+				if listed(kind, domain) {
+					return fmt.Errorf("%s is still %s", domain, kind)
+				}
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config:      config("ads.block.test."),
+				ExpectError: regexp.MustCompile(`must match`),
+			},
+			{
+				Config: config("ads.block.test"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_blocked_zone.ads", "id", "ads.block.test"),
+					func(*terraform.State) error {
+						if !listed("blocked", "ads.block.test") || !listed("allowed", "cdn.ads.block.test") {
+							return fmt.Errorf("entries missing on the server")
+						}
+						return nil
+					},
+				),
+			},
+			{
+				PreConfig: func() { call(t, api(t), "/api/blocked/delete", url.Values{"domain": {"ads.block.test"}}) },
+				Config:    config("ads.block.test"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_blocked_zone.ads", plancheck.ResourceActionCreate)},
+				},
+			},
+			{
+				Config: config("tracker.block.test"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_blocked_zone.ads", plancheck.ResourceActionDestroyBeforeCreate)},
+				},
+				Check: func(*terraform.State) error {
+					if listed("blocked", "ads.block.test") {
+						return fmt.Errorf("ads.block.test is still blocked")
+					}
+					return nil
+				},
+			},
+			{
+				ResourceName:      "technitium_blocked_zone.ads",
+				ImportState:       true,
+				ImportStateId:     "tracker.block.test",
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "technitium_allowed_zone.cdn",
+				ImportState:       true,
+				ImportStateId:     "cdn.ads.block.test",
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccUsersGroupsAndPermissions(t *testing.T) {
+	config := func(username, password string) string {
+		return fmt.Sprintf(`
+resource "technitium_user" "alice" {
+  username     = "%s"
+  password     = "%s"
+  display_name = "Alice"
+}
+
+resource "technitium_group" "ops" {
+  name        = "Ops"
+  description = "Operations"
+  members     = [technitium_user.alice.username]
+}
+
+resource "technitium_permissions" "zones" {
+  section = "Zones"
+  user_permissions = [
+    { username = technitium_user.alice.username, can_view = true, can_modify = false, can_delete = false },
+  ]
+  group_permissions = [
+    { name = "Administrators", can_view = true, can_modify = true, can_delete = true },
+    { name = "DNS Administrators", can_view = true, can_modify = true, can_delete = true },
+    { name = technitium_group.ops.name, can_view = true, can_modify = true, can_delete = false },
+  ]
+}
+`, username, password)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy: func(*terraform.State) error {
+			c, err := login()
+			if err != nil {
+				return err
+			}
+			if _, err = c.Call(context.Background(), "/api/admin/users/get", url.Values{"user": {"alice"}}); err == nil {
+				return fmt.Errorf("user alice still exists")
+			}
+			if _, err = c.Call(context.Background(), "/api/admin/groups/get", url.Values{"group": {"Ops"}}); err == nil {
+				return fmt.Errorf("group Ops still exists")
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config:      config("Alice", "first-secret"),
+				ExpectError: regexp.MustCompile(`must match`),
+			},
+			{
+				Config: config("alice", "first-secret"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_group.ops", "members.0", "alice"),
+					resource.TestCheckResourceAttr("technitium_permissions.zones", "group_permissions.#", "3"),
+					resource.TestCheckResourceAttr("technitium_user.alice", "session_timeout_seconds", "1800"),
+				),
+			},
+			{
+				// The password changes in place, and the new one logs in.
+				Config: config("alice", "second-secret"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_user.alice", plancheck.ResourceActionUpdate)},
+				},
+				Check: func(*terraform.State) error {
+					c := client.New(os.Getenv("TECHNITIUM_HOST"), "", "test", false, nil)
+					return c.Login(context.Background(), "alice", "second-secret")
+				},
+			},
+			{
+				// A change made behind Terraform's back shows up as drift.
+				PreConfig: func() { call(t, api(t), "/api/admin/groups/set", url.Values{"group": {"Ops"}, "members": {""}}) },
+				Config:    config("alice", "second-secret"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_group.ops", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_group.ops", "members.#", "1"),
+			},
+			{
+				ResourceName:            "technitium_user.alice",
+				ImportState:             true,
+				ImportStateId:           "alice",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"password"},
+			},
+			{
+				ResourceName:      "technitium_group.ops",
+				ImportState:       true,
+				ImportStateId:     "Ops",
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "technitium_permissions.zones",
+				ImportState:       true,
+				ImportStateId:     "Zones",
 				ImportStateVerify: true,
 			},
 		},
