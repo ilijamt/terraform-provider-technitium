@@ -15,8 +15,8 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/technitium"
 )
 
-// reader imports and reads objects through the provider, in process, the way
-// Terraform does, so the values are exactly what an import puts in state.
+// reader goes through the provider the way Terraform does, so the values are
+// exactly what an import puts in state.
 type reader struct {
 	srv     tfprotov6.ProviderServer
 	schemas map[string]*tfprotov6.Schema
@@ -62,8 +62,6 @@ func newReader(ctx context.Context, version string, hc *http.Client, o Options) 
 	return &reader{srv: srv, schemas: schema.ResourceSchemas}, nil
 }
 
-// read imports the object with the ID and returns its state, or nil when the
-// object is gone.
 func (r *reader) read(ctx context.Context, typ, id string) (map[string]tftypes.Value, error) {
 	name := "technitium_" + typ
 	schema, ok := r.schemas[name]

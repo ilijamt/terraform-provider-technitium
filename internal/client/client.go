@@ -1,4 +1,3 @@
-// Package client calls the Technitium DNS Server HTTP API.
 package client
 
 import (
@@ -18,7 +17,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// Error is a non "ok" status returned by the API.
 type Error struct {
 	Path    string
 	Status  string
@@ -29,13 +27,11 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s: %s", e.Path, e.Status, e.Message)
 }
 
-// IsDropped reports whether the connection was cut off before an answer, so
-// the call may or may not have taken effect.
+// IsDropped means the call may or may not have taken effect.
 func IsDropped(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
-// IsNotFound reports whether the API said the object does not exist.
 func IsNotFound(err error) bool {
 	e, ok := err.(*Error)
 	if !ok {
@@ -52,8 +48,6 @@ type Client struct {
 	http      *http.Client
 }
 
-// New returns a client for host (e.g. http://localhost:5380). When hc is nil
-// a default client is used; insecure skips TLS verification.
 func New(host, token, userAgent string, insecure bool, hc *http.Client) *Client {
 	if hc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -64,9 +58,13 @@ func New(host, token, userAgent string, insecure bool, hc *http.Client) *Client 
 }
 
 // checkRedirect refuses redirects that turn the POST into a GET, which drops
-// the form and lets a call like settings/set succeed without changing anything.
+// the form and lets a call like settings/set succeed without changing anything,
+// and those that would resend the form, with its passwords, to another host or
+// over plain http.
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	if req.Method != via[0].Method {
+	from := via[0].URL
+	if req.Method != via[0].Method || !strings.EqualFold(req.URL.Hostname(), from.Hostname()) ||
+		from.Scheme == "https" && req.URL.Scheme != "https" {
 		return fmt.Errorf("redirected to %s, set host to that address", req.URL.Redacted())
 	}
 	if len(via) >= 10 {
@@ -75,7 +73,6 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// Login exchanges a username and password for a session token.
 func (c *Client) Login(ctx context.Context, username, password string) error {
 	resp, err := c.retry(ctx, "/api/user/login", url.Values{"user": {username}, "pass": {password}}, true)
 	if err != nil {
@@ -89,22 +86,29 @@ func (c *Client) Login(ctx context.Context, username, password string) error {
 	return nil
 }
 
-// busy is the error the server answers a read with while another request
-// changes the same data. Reading again shortly after succeeds.
+// busy is the server's answer to a read while another request changes the
+// same data.
 const busy = "Operation is not valid due to the current state of the object."
 
-// Call posts params to path and returns the "response" object. Calls that hit
-// a moment the server cannot serve are tried again: a read that finds it busy
-// with the same data, and any call that finds it restarting its web service,
-// as it does after some settings change. A call cut off mid-way is only tried
-// again when repeating it is harmless, which an add, create or install is not.
+// Call retries a busy read and any call made while the server restarts its
+// web service, as it does after some settings change. A call cut off mid-way
+// is retried only when repeating it is harmless, which an add, create, sign,
+// install or convert is not.
 func (c *Client) Call(ctx context.Context, path string, params url.Values) (map[string]any, error) {
 	return c.retry(ctx, path, params, false)
 }
 
+type onceKey struct{}
+
+// Once marks ctx so a call cut off mid-way is not sent again, for a call
+// that does something else when repeated.
+func Once(ctx context.Context) context.Context {
+	return context.WithValue(ctx, onceKey{}, true)
+}
+
 func (c *Client) retry(ctx context.Context, path string, params url.Values, root bool) (map[string]any, error) {
 	read := strings.HasSuffix(path, "/get") || strings.HasSuffix(path, "/list")
-	creates := strings.Contains(path, "/add") || strings.HasSuffix(path, "/create") || strings.HasSuffix(path, "Install") || strings.HasSuffix(path, "/install")
+	creates := unrepeatable(path) || ctx.Value(onceKey{}) != nil
 	for attempt := 1; ; attempt++ {
 		resp, err := c.call(ctx, path, params, root)
 		var e *Error
@@ -120,6 +124,18 @@ func (c *Client) retry(ctx context.Context, path string, params url.Values, root
 		case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
 		}
 	}
+}
+
+// unrepeatable matches the last path segment loosely, so a new endpoint such
+// as createToken or addReservedLease is never resent by accident.
+func unrepeatable(path string) bool {
+	seg := strings.ToLower(path[strings.LastIndex(path, "/")+1:])
+	for _, s := range []string{"add", "create", "install", "sign", "convert"} {
+		if strings.Contains(seg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) call(ctx context.Context, path string, params url.Values, root bool) (map[string]any, error) {

@@ -13,7 +13,6 @@ Allows a domain name and its subdomains, even when a block list blocks them. Blo
 ## Example Usage
 
 ```terraform
-# Allows a domain that a block list in technitium_settings_blocking blocks.
 resource "technitium_allowed_zone" "cdn" {
   domain = "cdn.example.com"
 }

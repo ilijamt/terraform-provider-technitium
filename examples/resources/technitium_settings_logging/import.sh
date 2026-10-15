@@ -1,0 +1,1 @@
+terraform import technitium_settings_logging.this settings_logging

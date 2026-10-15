@@ -6,8 +6,7 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
 )
 
-// domainName is a domain name without the trailing dot, which the allowed
-// and blocked zones reject.
+// The allowed and blocked zones reject a trailing dot.
 const domainName = `^[^.]+(\.[^.]+)*$`
 
 var (
@@ -15,9 +14,8 @@ var (
 	blockedZone = listedZone("blocked", "Blocks a domain name and its subdomains, answering as `blocking_type` in `technitium_settings_blocking` says.")
 )
 
-// listedZone is an entry of the allowed or blocked zone. The list call
-// browses the zone tree and returns the records at the domain, so an entry is
-// found by the records named after it.
+// The list call returns the records at a domain, so an entry is found by
+// the records named after it.
 func listedZone(kind, description string) framework.Spec {
 	return framework.Spec{
 		Name:        kind + "_zone",

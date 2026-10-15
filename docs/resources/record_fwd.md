@@ -13,9 +13,15 @@ Manages a single `FWD` record in an authoritative zone.
 ## Example Usage
 
 ```terraform
+resource "technitium_zone" "fwd_lan" {
+  zone = "lan.example.com"
+  type = "Forwarder"
+}
+
+# The server keeps every FWD record at TTL 0, so there is no ttl.
 resource "technitium_record_fwd" "lan" {
-  zone      = "lan.example.com"
-  domain    = "lan.example.com"
+  zone      = technitium_zone.fwd_lan.zone
+  domain    = technitium_zone.fwd_lan.zone
   protocol  = "Udp"
   forwarder = "192.168.178.2"
 }
@@ -35,7 +41,7 @@ resource "technitium_record_fwd" "lan" {
 - `comments` (String) Comments stored with the record.
 - `disable` (Boolean) Disable the record without deleting it. Defaults to `false`.
 - `dnssec_validation` (Boolean) Validate the forwarder's answers with DNSSEC. Defaults to `false`.
-- `expiry_ttl` (Number) Deletes the record automatically this many seconds after it was last modified. Terraform then creates it again on the next apply.
+- `expiry_ttl` (Number) Deletes the record automatically this many seconds after it was last modified. Terraform then creates it again on the next apply. Defaults to `0`, which keeps the record.
 - `forwarder_priority` (Number) The forwarder's priority. Lower values are queried first; forwarders with the same priority are queried together.
 - `protocol` (String) The protocol for reaching the forwarder: `Udp` (default), `Tcp`, `Tls`, `Https` or `Quic`.
 - `proxy_address` (String) The proxy address, when `proxy_type` is `Http` or `Socks5`.
@@ -43,8 +49,18 @@ resource "technitium_record_fwd" "lan" {
 - `proxy_port` (Number) The proxy port, when `proxy_type` is `Http` or `Socks5`.
 - `proxy_type` (String) The proxy for reaching the forwarder: `NoProxy`, `DefaultProxy` (default, the proxy in `technitium_settings_proxy_forwarders`), `Http` or `Socks5`.
 - `proxy_username` (String) The proxy username, when `proxy_type` is `Http` or `Socks5`.
-- `ttl` (Number) The record TTL in seconds. Defaults to the default record TTL in the server settings.
 
 ### Read-Only
 
 - `id` (String) The resource identifier.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# zone/domain/protocol/forwarder
+terraform import technitium_record_fwd.lan lan.example.com/lan.example.com/Udp/192.168.178.2
+```

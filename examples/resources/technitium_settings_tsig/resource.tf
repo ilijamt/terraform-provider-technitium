@@ -1,3 +1,8 @@
+variable "tsig_secret" {
+  type      = string
+  sensitive = true
+}
+
 resource "technitium_settings_tsig" "this" {
   tsig_keys = [{
     key_name       = "transfer"

@@ -11,7 +11,7 @@ STAMP := -X $(MODULE)/version.Version=$(GIT_VERSION) -X $(MODULE)/version.Commit
 .PHONY: generate
 generate:
 	go tool tfplugindocs generate --provider-name technitium --provider-dir ./cmd/provider \
-		--examples-dir ../../examples --rendered-website-dir ../../docs
+		--examples-dir ../../examples --website-source-dir ../../templates --rendered-website-dir ../../docs
 
 .PHONY: build
 build:

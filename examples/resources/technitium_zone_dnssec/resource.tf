@@ -1,5 +1,9 @@
+resource "technitium_zone" "dnssec_home" {
+  zone = "home.example.com"
+}
+
 resource "technitium_zone_dnssec" "home" {
-  zone      = technitium_zone.home.zone
+  zone      = technitium_zone.dnssec_home.zone
   algorithm = "ECDSA"
   curve     = "P256"
   nx_proof  = "NSEC3"
@@ -11,7 +15,6 @@ resource "technitium_zone_dnssec" "home" {
   }
 }
 
-# The DS records to register at the parent zone.
 output "ds_records" {
   value = technitium_zone_dnssec.home.ds_records
 }

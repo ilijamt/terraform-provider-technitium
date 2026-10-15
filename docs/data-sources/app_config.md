@@ -21,5 +21,5 @@ Reads what `technitium_app_config` manages, without managing it, found by `name`
 
 ### Read-Only
 
-- `config` (String) The app's config as JSON, for example from `jsonencode(...)`. Differences in spacing and key order alone are not changes.
+- `config` (String, Sensitive) The app's config as JSON, for example from `jsonencode(...)`. Differences in spacing and key order alone are not changes.
 - `id` (String) The identifier, as the resource has it.

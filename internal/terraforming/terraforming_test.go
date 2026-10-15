@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 
@@ -219,4 +221,47 @@ func TestKeptNote(t *testing.T) {
 	assert.Equal(t, "# Administrators and DNS Administrators always have full rights here: the server adds them, so they are not listed.\n",
 		note("Administrators", "DNS Administrators"))
 	assert.Empty(t, keptNote(framework.Spec{Attrs: []framework.Attr{{Name: "zone"}}}))
+}
+
+func TestDeclaresProviders(t *testing.T) {
+	dir := t.TempDir()
+	put := func(name, src string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644))
+	}
+	out := map[string]*hclwrite.File{"zones.tf": hclwrite.NewEmptyFile()}
+
+	put("main.tf", "# required_providers is only a comment here\nterraform {\n  required_version = \">= 1.5\"\n}\n")
+	put("zones.tf", "terraform {\n  required_providers {}\n}\n")
+	put("old.tf", marker+"terraform {\n  required_providers {}\n}\n")
+	name, err := declaresProviders(dir, out)
+	require.NoError(t, err)
+	assert.Empty(t, name, "a comment, a file written now and a generated file do not count")
+
+	put("versions.tf", "terraform {\n  required_providers {\n    null = { source = \"hashicorp/null\" }\n  }\n}\n")
+	name, err = declaresProviders(dir, out)
+	require.NoError(t, err)
+	assert.Equal(t, "versions.tf", name)
+
+	name, err = declaresProviders(filepath.Join(dir, "missing"), out)
+	require.NoError(t, err)
+	assert.Empty(t, name, "no directory yet")
+}
+
+func TestAddVersions(t *testing.T) {
+	var warnings []string
+	warn := func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
+
+	dir := t.TempDir()
+	out := map[string]*hclwrite.File{}
+	require.NoError(t, addVersions(dir, out, warn))
+	assert.Contains(t, out, "technitium_versions.tf")
+	assert.Empty(t, warnings)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "versions.tf"), []byte("terraform {\n  required_providers {}\n}\n"), 0o644))
+	out = map[string]*hclwrite.File{}
+	require.NoError(t, addVersions(dir, out, warn))
+	assert.NotContains(t, out, "technitium_versions.tf", "a module has one required_providers")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "versions.tf")
+	assert.Contains(t, warnings[0], `technitium = { source = "ilijamt/technitium" }`)
 }

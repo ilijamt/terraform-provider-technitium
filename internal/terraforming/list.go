@@ -15,29 +15,19 @@ import (
 // they are exported as data sources.
 var builtinGroups = []string{"Administrators", "DHCP Administrators", "DNS Administrators", "Everyone"}
 
-// object is one thing on the server to import.
 type object struct {
-	// Type is the resource name without the technitium_ prefix.
-	Type string
-	// Label is the name to derive the resource label from.
+	Type  string
 	Label string
-	// ID is the import ID.
-	ID string
-	// Zone is the zone a zone, SOA or record object belongs to.
-	Zone string
-	// Fill holds values the server does not read back, written for
-	// attributes the read leaves unset.
-	Fill map[string]string
-	// Data marks an object Terraform cannot delete, written as a data
-	// source found by Identity.
+	ID    string
+	Zone  string
+	// Data objects cannot be deleted, so they are written as data sources
+	// found by Identity.
 	Data     bool
 	Identity map[string]string
 
-	// name is the resource label, given out before writing.
 	name string
 }
 
-// caller is what listing needs from the API client.
 type caller interface {
 	Call(ctx context.Context, path string, params url.Values) (map[string]any, error)
 }
@@ -49,7 +39,6 @@ type lister struct {
 	warn  func(format string, args ...any)
 }
 
-// list returns every object on the server, zones filtered to l.zones when set.
 func (l *lister) list(ctx context.Context) ([]object, error) {
 	var out []object
 	for _, step := range []func(context.Context) ([]object, error){
@@ -64,8 +53,7 @@ func (l *lister) list(ctx context.Context) ([]object, error) {
 	return out, nil
 }
 
-// listZones returns the zones, and the SOA and other records of the zones
-// whose records are kept on this server.
+// Only zones whose records are kept on this server have their records listed.
 func (l *lister) listZones(ctx context.Context) ([]object, error) {
 	resp, err := l.api.Call(ctx, "/api/zones/list", nil)
 	if err != nil {
@@ -95,7 +83,9 @@ func (l *lister) listZones(ctx context.Context) ([]object, error) {
 		}
 		for _, r := range items(records, "records") {
 			rtype, _ := r["type"].(string)
-			if rtype == "SOA" {
+			// The DNSSEC records come with signing, which zone_dnssec owns.
+			switch rtype {
+			case "SOA", "DNSKEY", "RRSIG", "NSEC", "NSEC3", "NSEC3PARAM":
 				continue
 			}
 			spec, ok := l.specs["record_"+strings.ToLower(rtype)]
@@ -114,9 +104,6 @@ func (l *lister) listZones(ctx context.Context) ([]object, error) {
 	return out, nil
 }
 
-// recordID is the import ID of a record: its identity attributes, taken from
-// the record as the read call returns it. It is the short form, the values
-// joined by "/", when that is unambiguous, and a JSON object otherwise.
 func recordID(spec framework.Spec, zone string, record map[string]any) (string, error) {
 	id := map[string]any{"zone": zone}
 	parts := []string{zone}
@@ -186,8 +173,7 @@ func (l *lister) listDHCP(ctx context.Context) ([]object, error) {
 	return out, nil
 }
 
-// listBlocking walks the allowed and blocked zone trees: the list call
-// returns the records at a domain and the subdomains below it.
+// The list call returns only one level of the tree, so it is walked.
 func (l *lister) listBlocking(ctx context.Context) ([]object, error) {
 	var out []object
 	for _, kind := range []string{"allowed", "blocked"} {
@@ -281,9 +267,8 @@ func (l *lister) listAccess(ctx context.Context) ([]object, error) {
 	return out, nil
 }
 
-// listApps returns the installed apps with their config. The server does not
-// return the URL an app came from, so its DNS App Store URL is used; an app
-// installed some other way has none and is not exported.
+// The server does not return the URL an app came from, so apps are written
+// without one, which adopts them as they are.
 func (l *lister) listApps(ctx context.Context) ([]object, error) {
 	resp, err := l.api.Call(ctx, "/api/apps/list", nil)
 	if err != nil {
@@ -295,17 +280,11 @@ func (l *lister) listApps(ctx context.Context) ([]object, error) {
 		if name == "" {
 			continue
 		}
-		if url, _ := a["updateUrl"].(string); url != "" {
-			out = append(out, object{Type: "app", Label: name, ID: name, Fill: map[string]string{"url": url}})
-		} else {
-			l.warn("skipping app %s: not from the DNS App Store, so there is no URL to install it from", name)
-		}
-		out = append(out, object{Type: "app_config", Label: name, ID: name})
+		out = append(out, object{Type: "app", Label: name, ID: name}, object{Type: "app_config", Label: name, ID: name})
 	}
 	return out, nil
 }
 
-// permissionsFor returns the permissions_<name> resource of a section.
 func (l *lister) permissionsFor(section string) (string, bool) {
 	for name, s := range l.specs {
 		if strings.HasPrefix(name, "permissions_") && s.Fixed["section"] == section {
@@ -315,7 +294,6 @@ func (l *lister) permissionsFor(section string) (string, bool) {
 	return "", false
 }
 
-// items returns the objects in the list at key.
 func items(resp map[string]any, key string) []map[string]any {
 	list, _ := resp[key].([]any)
 	var out []map[string]any
@@ -327,7 +305,6 @@ func items(resp map[string]any, key string) []map[string]any {
 	return out
 }
 
-// lookup follows a dotted key through nested objects.
 func lookup(obj map[string]any, key string) (any, bool) {
 	var cur any = obj
 	for _, k := range strings.Split(key, ".") {

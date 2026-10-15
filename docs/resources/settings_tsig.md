@@ -13,6 +13,11 @@ Manages the TSIG keys that authenticate zone transfers, notifies and dynamic upd
 ## Example Usage
 
 ```terraform
+variable "tsig_secret" {
+  type      = string
+  sensitive = true
+}
+
 resource "technitium_settings_tsig" "this" {
   tsig_keys = [{
     key_name       = "transfer"

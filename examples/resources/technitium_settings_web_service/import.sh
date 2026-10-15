@@ -1,0 +1,1 @@
+terraform import technitium_settings_web_service.this settings_web_service

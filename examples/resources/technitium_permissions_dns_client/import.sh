@@ -1,0 +1,1 @@
+terraform import technitium_permissions_dns_client.this permissions_dns_client

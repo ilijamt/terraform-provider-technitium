@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net/url"
 	"strconv"
@@ -23,7 +24,6 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/client"
 )
 
-// mockAPI records every call and answers with respond.
 type mockAPI struct {
 	calls   []call
 	respond func(path string, params url.Values) (map[string]any, error)
@@ -265,7 +265,6 @@ func nullState(s schema.Schema) tfsdk.State {
 	return tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(context.Background()), nil)}
 }
 
-// object builds a full resource value, null where vals has nothing.
 func object(s schema.Schema, vals map[string]tftypes.Value) tftypes.Value {
 	typ := s.Type().TerraformType(context.Background()).(tftypes.Object)
 	out := map[string]tftypes.Value{}
@@ -307,7 +306,6 @@ func TestCreateKeepsStateOnLaterFailure(t *testing.T) {
 	assert.Equal(t, "example.com/www.example.com/10.0.0.2", id.ValueString())
 }
 
-// Optional identity values may be left empty in an import id.
 func TestImportEmptyPartIsNull(t *testing.T) {
 	txt := Spec{Name: "record_txt", Create: "add", Read: "get", Update: "update", Delete: "delete", List: "records", Attrs: []Attr{
 		{Name: "zone", Param: "zone", Type: String, Required: true, Identity: true, Create: true},
@@ -377,7 +375,14 @@ func TestToggleAndSource(t *testing.T) {
 		{Name: "enabled", Param: "enabled", Type: Bool, Key: "enabled", Update: true,
 			Toggle: &Toggle{On: "enable", Off: "disable"}, Source: &Source{Path: "list", List: "scopes"}},
 	}}
+	exists := false
 	api := &mockAPI{respond: func(path string, _ url.Values) (map[string]any, error) {
+		if path == "set" {
+			exists = true
+		}
+		if !exists {
+			return nil, &client.Error{Message: "DHCP scope was not found: lan"}
+		}
 		if path == "list" {
 			return map[string]any{"scopes": []any{
 				map[string]any{"name": "other", "enabled": true},
@@ -390,9 +395,12 @@ func TestToggleAndSource(t *testing.T) {
 
 	plan := map[string]tftypes.Value{"name": str("lan"), "dns_ttl": unknown(Int64), "enabled": boolean(false)}
 	require.NoError(t, r.create(context.Background(), plan))
-	assert.Equal(t, []string{"set", "disable"}, api.paths())
-	assert.False(t, api.calls[0].params.Has("enabled"), "a toggle is not a parameter")
-	assert.Equal(t, url.Values{"name": {"lan"}}, api.calls[1].params)
+	assert.Equal(t, []string{"get", "set", "disable"}, api.paths(), "create checks the scope does not exist yet")
+	assert.False(t, api.calls[1].params.Has("enabled"), "a toggle is not a parameter")
+	assert.Equal(t, url.Values{"name": {"lan"}}, api.calls[2].params)
+
+	err := r.create(context.Background(), plan)
+	require.ErrorContains(t, err, "already exists", "the update call would take over an existing scope")
 
 	state, err := r.read(context.Background(), plan)
 	require.NoError(t, err)
@@ -464,4 +472,165 @@ func TestCreateCutOff(t *testing.T) {
 		return map[string]any{"records": []any{}}, nil
 	}
 	assert.Error(t, r.create(context.Background(), identity()), "nothing was created")
+}
+
+func TestReadKeepsNameSpelling(t *testing.T) {
+	spec := Spec{Name: "record_cname", Read: "get", List: "records", Attrs: []Attr{
+		{Name: "domain", Param: "domain", Type: String, Key: "name", Identity: true, Compare: DomainName},
+		{Name: "cname", Param: "cname", Type: String, Key: "rData.cname", Compare: DomainName},
+		{Name: "comments", Param: "comments", Type: String, Key: "comments"},
+	}}
+	api := &mockAPI{respond: func(string, url.Values) (map[string]any, error) {
+		return map[string]any{"records": []any{map[string]any{"name": "www.example.com", "comments": "web", "rData": map[string]any{"cname": "target.example.net"}}}}, nil
+	}}
+	prior := map[string]tftypes.Value{"domain": str("www.example.com"), "cname": str("Target.Example.NET."), "comments": str("Web")}
+	state, err := (&Resource{spec: spec, client: api}).read(context.Background(), prior)
+	require.NoError(t, err)
+	assert.True(t, str("Target.Example.NET.").Equal(state["cname"]), "a name keeps its configured spelling")
+	assert.True(t, str("web").Equal(state["comments"]), "other values keep case drift")
+}
+
+func TestUpdateOnChange(t *testing.T) {
+	spec := Spec{Name: "record_a", Update: "update", Attrs: []Attr{
+		{Name: "domain", Param: "domain", Type: String, Identity: true},
+		{Name: "ttl", Param: "ttl", Type: Int64, Update: true},
+		{Name: "ptr", Param: "ptr", Type: Bool, Update: true, OnChange: true},
+	}}
+	api := &mockAPI{}
+	prior := map[string]tftypes.Value{"domain": str("www.example.com"), "ttl": num(300), "ptr": boolean(true)}
+	plan := map[string]tftypes.Value{"domain": str("www.example.com"), "ttl": num(600), "ptr": boolean(true)}
+	require.NoError(t, (&Resource{spec: spec, client: api}).update(context.Background(), prior, plan))
+	assert.False(t, api.calls[0].params.Has("ptr"), "an unchanged ptr would replace the PTR records again")
+}
+
+func TestReadMissingKeyIsDefault(t *testing.T) {
+	spec := Spec{Name: "record_a", Read: "get", List: "records", Attrs: []Attr{
+		{Name: "domain", Param: "domain", Type: String, Key: "name", Identity: true},
+		{Name: "comments", Param: "comments", Type: String, Key: "comments", Default: ""},
+	}}
+	api := &mockAPI{respond: func(string, url.Values) (map[string]any, error) {
+		return map[string]any{"records": []any{map[string]any{"name": "www.example.com"}}}, nil
+	}}
+	state, err := (&Resource{spec: spec, client: api}).read(context.Background(), map[string]tftypes.Value{"domain": str("www.example.com"), "comments": str("web")})
+	require.NoError(t, err)
+	assert.True(t, str("").Equal(state["comments"]), "the server leaves out an empty comment")
+}
+
+func TestReadNullIsDefault(t *testing.T) {
+	spec := Spec{Name: "zone", Read: "get", Attrs: []Attr{
+		{Name: "zone", Param: "zone", Type: String, Key: "name", Identity: true},
+		{Name: "catalog", Param: "catalog", Type: String, Key: "catalog", Default: ""},
+	}}
+	api := &mockAPI{respond: func(string, url.Values) (map[string]any, error) {
+		return map[string]any{"name": "example.com", "catalog": nil}, nil
+	}}
+	state, err := (&Resource{spec: spec, client: api}).read(context.Background(), map[string]tftypes.Value{"zone": str("example.com"), "catalog": str("cat.example")})
+	require.NoError(t, err)
+	assert.True(t, str("").Equal(state["catalog"]), "a zone outside any catalog reads catalog as null")
+}
+
+func TestCreateLeavesOutDefault(t *testing.T) {
+	spec := Spec{Name: "zone", Create: "create", Attrs: []Attr{
+		{Name: "zone", Param: "zone", Type: String, Identity: true, Create: true},
+		{Name: "catalog", Param: "catalog", Type: String, Create: true, Default: ""},
+	}}
+	api := &mockAPI{}
+	r := &Resource{spec: spec, client: api}
+	require.NoError(t, r.create(context.Background(), map[string]tftypes.Value{"zone": str("example.com"), "catalog": str("")}))
+	assert.False(t, api.calls[0].params.Has("catalog"), "the server looks up an empty catalog name and fails")
+
+	api.calls = nil
+	require.NoError(t, r.create(context.Background(), map[string]tftypes.Value{"zone": str("example.com"), "catalog": str("cat.example")}))
+	assert.Equal(t, "cat.example", api.calls[0].params.Get("catalog"))
+}
+
+func TestAutoMapKeys(t *testing.T) {
+	spec := Spec{Name: "record_https", Read: "get", Update: "update", Delete: "delete", List: "records", Attrs: []Attr{
+		{Name: "domain", Param: "domain", Type: String, Key: "name", Identity: true, Compare: DomainName},
+		{Name: "svc_params", Param: "svcParams", Type: Map, Key: "rData.svcParams", Identity: true,
+			Auto: map[string]string{"ipv4hint": "auto_ipv4_hint"}, NewParam: "newSvcParams"},
+		{Name: "auto_ipv4_hint", Param: "autoIpv4Hint", Type: Bool, Key: "rData.autoIpv4Hint", Update: true},
+		{Name: "ttl", Param: "ttl", Type: Int64, Key: "ttl", Update: true},
+	}}
+	api := &mockAPI{respond: func(string, url.Values) (map[string]any, error) {
+		return map[string]any{"records": []any{map[string]any{"name": "www.example.com", "ttl": json.Number("300"), "rData": map[string]any{
+			"autoIpv4Hint": true, "svcParams": map[string]any{"alpn": "h2", "ipv4hint": "10.0.0.1"},
+		}}}}, nil
+	}}
+	r := &Resource{spec: spec, client: api}
+	prior := map[string]tftypes.Value{
+		"domain":         str("www.example.com"),
+		"svc_params":     tftypes.NewValue(Map.tf(), map[string]tftypes.Value{"alpn": str("h2")}),
+		"auto_ipv4_hint": boolean(true),
+		"ttl":            num(300),
+	}
+
+	state, err := r.read(context.Background(), prior)
+	require.NoError(t, err)
+	require.NotNil(t, state, "the filled in hint does not hide the record")
+	assert.True(t, prior["svc_params"].Equal(state["svc_params"]))
+
+	plan := maps.Clone(prior)
+	plan["ttl"] = num(600)
+	api.calls = nil
+	require.NoError(t, r.update(context.Background(), prior, plan))
+	assert.Equal(t, []string{"get", "update"}, api.paths())
+	assert.Equal(t, "alpn|h2|ipv4hint|10.0.0.1", api.calls[1].params.Get("svcParams"), "the record is located by what the server stores")
+	assert.Equal(t, "alpn|h2", api.calls[1].params.Get("newSvcParams"))
+}
+
+// Converting a catalog zone converts its members, so a member's own convert
+// in the same apply finds it already of the new type.
+func TestUpdateSkipsDoneConvert(t *testing.T) {
+	spec := Spec{Name: "zone", Read: "get", Update: "options", Attrs: []Attr{
+		{Name: "zone", Param: "zone", Type: String, Key: "name", Required: true, Identity: true},
+		{Name: "type", Param: "type", Type: String, Key: "type", Convert: &Convert{Path: "convert", From: map[string][]string{"Secondary": {"Primary"}}}},
+		{Name: "disabled", Param: "disabled", Type: Bool, Key: "disabled", Update: true},
+	}}
+	prior := map[string]tftypes.Value{"zone": str("example.com"), "type": str("Secondary"), "disabled": boolean(false)}
+	plan := maps.Clone(prior)
+	plan["type"] = str("Primary")
+
+	for live, want := range map[string][]string{
+		"Primary":   {"get", "options"},
+		"Secondary": {"get", "convert", "options"},
+	} {
+		t.Run(live, func(t *testing.T) {
+			api := &mockAPI{respond: func(path string, _ url.Values) (map[string]any, error) {
+				if path == "convert" && live == "Primary" {
+					return nil, &client.Error{Message: "Zone is already of the same type."}
+				}
+				return map[string]any{"name": "example.com", "type": live, "disabled": false}, nil
+			}}
+			require.NoError(t, (&Resource{spec: spec, client: api}).update(context.Background(), prior, plan))
+			assert.Equal(t, want, api.paths())
+		})
+	}
+}
+
+// A value unknown at plan time may change, so the values it resets are left
+// unknown too.
+func TestModifyPlanUnknownResets(t *testing.T) {
+	spec := Spec{Name: "zone", Read: "get", Update: "options", Attrs: []Attr{
+		{Name: "zone", Param: "zone", Type: String, Key: "name", Required: true, Identity: true},
+		{Name: "catalog", Param: "catalog", Type: String, Key: "catalog", Update: true, Resets: []string{"override"}},
+		{Name: "override", Param: "override", Type: Bool, Key: "override", Update: true},
+	}}
+	r := &Resource{spec: spec}
+	s := schemaOf(r)
+	prior := map[string]tftypes.Value{"id": str("example.com"), "zone": str("example.com"), "catalog": str("cat.example"), "override": boolean(true)}
+	plan := maps.Clone(prior)
+	plan["catalog"] = unknown(String)
+	config := map[string]tftypes.Value{"zone": str("example.com"), "catalog": unknown(String)}
+
+	resp := &resource.ModifyPlanResponse{Plan: tfsdk.Plan{Schema: s, Raw: object(s, plan)}}
+	r.ModifyPlan(context.Background(), resource.ModifyPlanRequest{
+		Plan:   tfsdk.Plan{Schema: s, Raw: object(s, plan)},
+		State:  tfsdk.State{Schema: s, Raw: object(s, prior)},
+		Config: tfsdk.Config{Schema: s, Raw: object(s, config)},
+	}, resp)
+	require.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+	var override types.Bool
+	resp.Plan.GetAttribute(context.Background(), path.Root("override"), &override)
+	assert.True(t, override.IsUnknown())
 }

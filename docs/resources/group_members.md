@@ -3,22 +3,35 @@
 page_title: "technitium_group_members Resource - technitium"
 subcategory: ""
 description: |-
-  Manages the full member list of a group, built-in groups (Administrators, DHCP Administrators, DNS Administrators) included. Users left out are removed from the group. Destroying the resource leaves the members as they are.
+  Manages the full member list of a group, built-in groups (Administrators, DHCP Administrators, DNS Administrators) included. Users left out are removed from the group. The server adds the user the provider logs in as back to Administrators, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.
 ---
 
 # technitium_group_members (Resource)
 
-Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included. Users left out are removed from the group. Destroying the resource leaves the members as they are.
+Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included. Users left out are removed from the group. The server adds the user the provider logs in as back to `Administrators`, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.
 
 ## Example Usage
 
 ```terraform
-resource "technitium_group_members" "ops" {
-  group   = technitium_group.ops.name
-  members = [technitium_user.alice.username]
+variable "alice_password" {
+  type      = string
+  sensitive = true
 }
 
-# Built-in groups exist on every server; manage only their members.
+resource "technitium_user" "members_alice" {
+  username = "alice"
+  password = var.alice_password
+}
+
+resource "technitium_group" "members_ops" {
+  name = "Ops"
+}
+
+resource "technitium_group_members" "ops" {
+  group   = technitium_group.members_ops.name
+  members = [technitium_user.members_alice.username]
+}
+
 resource "technitium_group_members" "administrators" {
   group   = "Administrators"
   members = ["admin"]

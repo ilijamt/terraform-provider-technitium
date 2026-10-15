@@ -162,6 +162,10 @@ func TestListSeparator(t *testing.T) {
 	s, err := a.param(tftypes.NewValue(List.tf(), []tftypes.Value{str("openid"), str("email")}))
 	require.NoError(t, err)
 	assert.Equal(t, "openid|email", s)
+
+	s, err = a.param(tftypes.NewValue(List.tf(), []tftypes.Value{str("a,b"), str("c")}))
+	require.NoError(t, err)
+	assert.Equal(t, "a,b|c", s, "commas inside an item stay")
 }
 
 func TestCanonicalJSON(t *testing.T) {

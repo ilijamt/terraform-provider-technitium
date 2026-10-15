@@ -1,0 +1,1 @@
+terraform import technitium_permissions_settings.this permissions_settings

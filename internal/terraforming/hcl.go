@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,19 +17,12 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// variable is a sensitive value the generated configuration takes from a
-// variable instead of holding it.
 type variable struct {
 	Name, Description string
 }
 
-// ref returns a reference to use instead of the string at path, which starts
-// with the attribute name, or false to write the string.
 type ref func(path []string, s string) (hclwrite.Tokens, bool)
 
-// resourceBlock writes the configuration of one imported object. Sensitive
-// values become references to new variables, which it returns; strings
-// refs knows become references.
 func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Schema, state map[string]tftypes.Value, refs ref, isJSON func(attr string) bool) []variable {
 	b := body.AppendNewBlock("resource", []string{"technitium_" + typ, label}).Body()
 	var vars []variable
@@ -46,7 +40,7 @@ func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Sch
 		if a.Name == "id" || readOnly {
 			continue
 		}
-		if a.Sensitive {
+		if a.Sensitive && !literal(typ, a.Name) {
 			// The server does not return some secrets, so a required one
 			// gets a variable even without a value.
 			if a.Required || !empty(v) || needsSecret(typ, a.Name, state) {
@@ -83,23 +77,66 @@ func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Sch
 	return vars
 }
 
-// needsSecret reports whether an optional secret the server does not return
-// is in use, so the configuration needs it: the SSO client secret once a
-// client is set up.
 func needsSecret(typ, attr string, state map[string]tftypes.Value) bool {
 	return typ == "settings_sso" && attr == "client_secret" && !empty(state["client_id"]) ||
 		typ == "settings_ldap" && attr == "bind_password" && !empty(state["bind_username"])
 }
 
-// owned reports whether an attribute is written even when empty, so that
-// Terraform owns the list: an entry added outside it shows as a change.
+// literal secrets are written as they are: the server returns them, and a
+// variable would lose the JSON layout that keeps the import plan empty.
+func literal(typ, attr string) bool {
+	return typ == "app_config" && attr == "config"
+}
+
+var secretValue = regexp.MustCompile(`(?i)(^|[;\s])(password|pwd)\s*=|^[a-z][a-z0-9+.-]*://[^/?#@\s]*:[^/?#@\s]*@|^(bearer|basic)\s+\S`)
+
+// secretKeys returns only keys, so a warning never repeats a value.
+func secretKeys(s string) []string {
+	var v any
+	if json.Unmarshal([]byte(s), &v) != nil {
+		return nil
+	}
+	found := map[string]bool{}
+	var walk func(key string, v any)
+	walk = func(key string, v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, e := range v {
+				l := strings.ToLower(k)
+				for _, w := range []string{"password", "passwd", "secret", "token", "apikey", "api_key", "credential", "connectionstring", "authorization"} {
+					if strings.Contains(l, w) {
+						found[k] = true
+					}
+				}
+				if strings.HasSuffix(l, "key") {
+					found[k] = true
+				}
+				walk(k, e)
+			}
+		case []any:
+			for _, e := range v {
+				walk(key, e)
+			}
+		case string:
+			if key != "" && secretValue.MatchString(v) {
+				found[key] = true
+			}
+		}
+	}
+	walk("", v)
+	if len(found) == 0 {
+		return nil
+	}
+	return sortedKeys(found)
+}
+
+// owned attributes are written even when empty, so an entry added outside
+// Terraform shows as a change.
 func owned(typ, attr string) bool {
 	return permissions(typ) && (attr == "user_permissions" || attr == "group_permissions") ||
 		typ == "settings_tsig" && attr == "tsig_keys"
 }
 
-// nestedSensitive reports whether the nested attribute at path (attribute,
-// element index, nested attribute) is sensitive.
 func nestedSensitive(obj *tfprotov6.SchemaObject, path []string) bool {
 	if len(path) < 3 {
 		return false
@@ -112,16 +149,12 @@ func nestedSensitive(obj *tfprotov6.SchemaObject, path []string) bool {
 	return false
 }
 
-// writer renders values as HCL. A value at a sensitive path is replaced by
-// secret(path), and a string refs knows by a reference.
 type writer struct {
 	sensitive func(path []string) bool
 	secret    func(path []string) hclwrite.Tokens
 	refs      ref
 }
 
-// tokens renders a value as HCL. Collections become tuples, maps and objects
-// become objects.
 func (w writer) tokens(v tftypes.Value, path []string) hclwrite.Tokens {
 	if w.sensitive != nil && w.sensitive(path) {
 		return w.secret(path)
@@ -162,18 +195,14 @@ func (w writer) tokens(v tftypes.Value, path []string) hclwrite.Tokens {
 			if fields[k].IsNull() {
 				continue
 			}
-			name := hclwrite.TokensForValue(cty.StringVal(k))
-			if hclsyntax.ValidIdentifier(k) {
-				name = hclwrite.TokensForIdentifier(k)
-			}
-			out = append(out, hclwrite.ObjectAttrTokens{Name: name, Value: w.tokens(fields[k], append(slices.Clone(path), k))})
+			out = append(out, hclwrite.ObjectAttrTokens{Name: objectKey(k), Value: w.tokens(fields[k], append(slices.Clone(path), k))})
 		}
 		return hclwrite.TokensForObject(out)
 	}
 }
 
-// empty reports values left out of the configuration: unset ones, and empty
-// strings and collections, which the server reads back the same either way.
+// Empty strings and collections are left out: the server reads them back
+// the same either way.
 func empty(v tftypes.Value) bool {
 	if !v.IsKnown() || v.IsNull() {
 		return true
@@ -196,8 +225,6 @@ func empty(v tftypes.Value) bool {
 	return false
 }
 
-// dataBlock writes a data source for an object Terraform cannot delete,
-// found by its identity attributes.
 func dataBlock(body *hclwrite.Body, typ, label string, identity map[string]string) {
 	b := body.AppendNewBlock("data", []string{"technitium_" + typ, label}).Body()
 	for _, k := range sortedKeys(identity) {
@@ -205,18 +232,14 @@ func dataBlock(body *hclwrite.Body, typ, label string, identity map[string]strin
 	}
 }
 
+// The ID stays a string literal even when it is JSON: Terraform 1.5 allows
+// no function calls in an import block.
 func importBlock(body *hclwrite.Body, typ, label, id string) {
 	b := body.AppendNewBlock("import", nil).Body()
 	b.SetAttributeTraversal("to", hcl.Traversal{hcl.TraverseRoot{Name: "technitium_" + typ}, hcl.TraverseAttr{Name: label}})
-	if t, ok := jsonencode(id); ok {
-		b.SetAttributeRaw("id", t)
-		return
-	}
 	b.SetAttributeValue("id", cty.StringVal(id))
 }
 
-// jsonencode renders a JSON object or array as jsonencode(...) of the same
-// value in HCL, or reports false for anything else.
 func jsonencode(s string) (hclwrite.Tokens, bool) {
 	d := json.NewDecoder(strings.NewReader(s))
 	d.UseNumber()
@@ -231,17 +254,12 @@ func jsonencode(s string) (hclwrite.Tokens, bool) {
 	return nil, false
 }
 
-// jsonTokens renders a decoded JSON value as HCL.
 func jsonTokens(v any) hclwrite.Tokens {
 	switch v := v.(type) {
 	case map[string]any:
 		var out []hclwrite.ObjectAttrTokens
 		for _, k := range sortedKeys(v) {
-			name := hclwrite.TokensForValue(cty.StringVal(k))
-			if hclsyntax.ValidIdentifier(k) {
-				name = hclwrite.TokensForIdentifier(k)
-			}
-			out = append(out, hclwrite.ObjectAttrTokens{Name: name, Value: jsonTokens(v[k])})
+			out = append(out, hclwrite.ObjectAttrTokens{Name: objectKey(k), Value: jsonTokens(v[k])})
 		}
 		return hclwrite.TokensForObject(out)
 	case []any:
@@ -263,6 +281,19 @@ func jsonTokens(v any) hclwrite.Tokens {
 	return hclwrite.TokensForValue(cty.NullVal(cty.DynamicPseudoType))
 }
 
+// objectKey quotes a key that is not an identifier, or is a keyword: a
+// leading for turns the object into a for expression.
+func objectKey(k string) hclwrite.Tokens {
+	switch k {
+	case "for", "in", "if", "null", "true", "false":
+	default:
+		if hclsyntax.ValidIdentifier(k) {
+			return hclwrite.TokensForIdentifier(k)
+		}
+	}
+	return hclwrite.TokensForValue(cty.StringVal(k))
+}
+
 func variableBlock(body *hclwrite.Body, v variable) {
 	b := body.AppendNewBlock("variable", []string{v.Name}).Body()
 	b.SetAttributeValue("description", cty.StringVal(v.Description))
@@ -270,7 +301,6 @@ func variableBlock(body *hclwrite.Body, v variable) {
 	b.SetAttributeValue("sensitive", cty.True)
 }
 
-// labels turns names into unique resource labels.
 type labels map[string]bool
 
 func (l labels) next(name string) string {
@@ -283,8 +313,6 @@ func (l labels) next(name string) string {
 	return unique
 }
 
-// sanitize turns a name into a label: lower case letters, digits and
-// underscores, "*" spelled out, never starting with a digit.
 func sanitize(name string) string {
 	var b strings.Builder
 	for _, r := range strings.ReplaceAll(strings.ToLower(name), "*", "wildcard") {

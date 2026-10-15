@@ -1,0 +1,1 @@
+terraform import technitium_settings_optional_protocols.this settings_optional_protocols

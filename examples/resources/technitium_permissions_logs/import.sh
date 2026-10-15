@@ -1,0 +1,1 @@
+terraform import technitium_permissions_logs.this permissions_logs

@@ -10,14 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// The rows of a permissions table are a name and the rights can_view,
-// can_modify and can_delete. Kept names are rows the server always keeps
-// with every right, whatever is set.
 var rights = []string{"can_view", "can_modify", "can_delete"}
 
-// dropKept removes from got the rows of kept names with every right, unless
-// prior has a row for that name: the server adds them on its own, so a
-// configuration may leave them out.
 func dropKept(a Attr, got, prior tftypes.Value) tftypes.Value {
 	var rows []tftypes.Value
 	if len(a.Kept) == 0 || !set(got) || got.As(&rows) != nil {
@@ -43,7 +37,6 @@ func dropKept(a Attr, got, prior tftypes.Value) tftypes.Value {
 	return tftypes.NewValue(got.Type(), out)
 }
 
-// keptRow returns the name of a row and whether it has every right.
 func keptRow(row tftypes.Value) (string, bool, bool) {
 	var obj map[string]tftypes.Value
 	if row.As(&obj) != nil {
@@ -63,8 +56,8 @@ func keptRow(row tftypes.Value) (string, bool, bool) {
 	return name, full, true
 }
 
-// keptValidator rejects a kept name with fewer than every right, which the
-// server would ignore, so the plan would never settle.
+// The server ignores fewer rights for a kept name, so the plan would never
+// settle.
 type keptValidator struct{ kept []string }
 
 func (v keptValidator) Description(context.Context) string {

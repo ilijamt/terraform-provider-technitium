@@ -26,6 +26,7 @@ Reads what `technitium_settings_proxy_forwarders` manages, without managing it.
 - `id` (String) The identifier, as the resource has it.
 - `proxy_address` (String) The proxy's host name or IP address.
 - `proxy_bypass` (List of String) The IP addresses, networks in CIDR notation and host or domain names that never go through the proxy.
+- `proxy_password` (String, Sensitive) The proxy password.
 - `proxy_port` (Number) The proxy's port.
 - `proxy_type` (String) The proxy for outbound requests: `None`, `Http` or `Socks5`.
 - `proxy_username` (String) The proxy username.

@@ -1,4 +1,3 @@
-// Package testserver provides a real Technitium DNS Server for acceptance tests.
 package testserver
 
 import (
@@ -21,10 +20,8 @@ const (
 	Label = "terraform-provider-technitium.testacc"
 )
 
-// Start returns the address of a Technitium server and a function that
-// removes it. TECHNITIUM_HOST points the tests at an existing server, which
-// must accept the Username and Password above. Otherwise it runs the
-// technitium/dns-server image matching technitium.Version in Docker.
+// Start uses the server at TECHNITIUM_HOST, which must accept Username and
+// Password, or else runs one in Docker.
 func Start(ctx context.Context) (host string, stop func(), err error) {
 	if host = os.Getenv("TECHNITIUM_HOST"); host != "" {
 		return host, func() {}, nil
@@ -33,9 +30,8 @@ func Start(ctx context.Context) (host string, stop func(), err error) {
 	return host, stop, err
 }
 
-// Run starts a technitium/dns-server container. It returns the address of its
-// API, its IP address on the Docker bridge network, where other containers
-// reach it, and a function that removes it.
+// Run also returns the container's IP on the Docker bridge network, where
+// other containers reach it.
 func Run(ctx context.Context) (host, ip string, stop func(), err error) {
 	out, err := exec.CommandContext(ctx, "docker", "run", "--detach", "--rm", "--label", Label,
 		"--publish", "127.0.0.1::5380",
@@ -69,7 +65,6 @@ func Run(ctx context.Context) (host, ip string, stop func(), err error) {
 	return host, ip, stop, nil
 }
 
-// wait polls until the server accepts a login.
 func wait(ctx context.Context, host string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

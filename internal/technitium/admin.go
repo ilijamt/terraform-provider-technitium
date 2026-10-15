@@ -7,7 +7,7 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
 )
 
-// username is how the server stores usernames: in lower case.
+// The server stores usernames in lower case.
 const username = `^[^A-Z]+$`
 
 var user = framework.Spec{
@@ -20,8 +20,8 @@ var user = framework.Spec{
 	Attrs: []framework.Attr{
 		{Name: "username", Param: "user", Type: framework.String, Key: "username", Required: true, Identity: true, Create: true, Update: true, Pattern: username,
 			Description: "The username, in lower case. Changing it replaces the user."},
-		{Name: "password", Param: "newPass", CreateParam: "pass", Type: framework.String, Required: true, Sensitive: true, Create: true, Update: true,
-			Description: "The password. The server never returns it, so a password changed outside Terraform is not detected; changing it here resets it."},
+		{Name: "password", Param: "newPass", CreateParam: "pass", Type: framework.String, Required: true, Sensitive: true, Create: true, Update: true, OnChange: true,
+			Description: "The password. The server never returns it, so a password changed outside Terraform is not detected, and is kept until this one changes."},
 		{Name: "display_name", Param: "displayName", Type: framework.String, Key: "displayName", Create: true, Update: true,
 			Description: "The display name."},
 		{Name: "disabled", Param: "disabled", Type: framework.Bool, Key: "disabled", Update: true,
@@ -48,13 +48,12 @@ var group = framework.Spec{
 	},
 }
 
-// groupMembers is the member list of a group, apart from the group so the
-// built-in groups' members can be managed too. The server only takes the
-// whole list, so the resource owns it; destroying it leaves the members.
+// groupMembers is apart from the group so the built-in groups' members can
+// be managed too. The server only takes the whole list.
 var groupMembers = framework.Spec{
 	Name: "group_members",
 	Description: "Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included. " +
-		"Users left out are removed from the group. Destroying the resource leaves the members as they are.",
+		"Users left out are removed from the group. The server adds the user the provider logs in as back to `Administrators`, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.",
 	Read:   "/api/admin/groups/get",
 	Update: "/api/admin/groups/set",
 	Attrs: []framework.Attr{
@@ -65,9 +64,6 @@ var groupMembers = framework.Spec{
 	},
 }
 
-// permissionSections are the sections of the server, by the name of their
-// permissions_<name> resource, with the groups the server always keeps on
-// them with full rights, whatever the set call says.
 var permissionSections = []struct {
 	name, section string
 	kept          []string
@@ -85,7 +81,6 @@ var permissionSections = []struct {
 	{"logs", "Logs", []string{"Administrators"}},
 }
 
-// kept describes the groups the server keeps with full rights.
 func kept(groups []string) string {
 	names := make([]string, len(groups))
 	for i, g := range groups {
@@ -94,9 +89,6 @@ func kept(groups []string) string {
 	return fmt.Sprintf("The server always keeps %s with full rights, whatever is set: leave them out, or list them with full rights. ", strings.Join(names, " and "))
 }
 
-// permissions are the user and group rights on each section of the server.
-// There is nothing to create or delete: a resource sets its section's lists,
-// and destroying it leaves them as they are.
 var permissions = func() []framework.Spec {
 	var out []framework.Spec
 	for _, s := range permissionSections {
@@ -120,9 +112,8 @@ var permissions = func() []framework.Spec {
 	return out
 }()
 
-// apiToken is an API token of a user, a session that does not expire. Its
-// value is only in the create call's response; the session list identifies it
-// by its first 16 characters, the partial token.
+// The token is only in the create call's response; the session list
+// identifies it by its first 16 characters.
 var apiToken = framework.Spec{
 	Name: "api_token",
 	Description: "Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no `token` value. " +
@@ -147,12 +138,8 @@ var apiToken = framework.Spec{
 	},
 }
 
-// zoneKept are the groups the server keeps with full rights on every zone.
 var zoneKept = []string{"Administrators", "DNS Administrators"}
 
-// zonePermissions are the user and group rights on one zone, on top of the
-// Zones section's. There is nothing to create or delete: the resource sets
-// the zone's lists, and destroying it leaves them as they are.
 var zonePermissions = framework.Spec{
 	Name: "zone_permissions",
 	Description: "Manages who may view, modify and delete one zone, on top of `technitium_permissions_zones`. The lists set here are the zone's full lists: users and groups left out lose their rights to it. " +
@@ -171,8 +158,6 @@ var zonePermissions = framework.Spec{
 	},
 }
 
-// rights are the columns of a permission row: who, then view, modify and
-// delete, in the order the set call takes them.
 func rights(name, key, description string) []framework.Column {
 	return []framework.Column{
 		{Name: name, Key: key, Type: framework.String, Description: description},

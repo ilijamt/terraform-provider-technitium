@@ -1,0 +1,2 @@
+# zone/domain/sshfp_algorithm/sshfp_fingerprint_type/sshfp_fingerprint
+terraform import technitium_record_sshfp.host sshfp.example.com/host.sshfp.example.com/Ed25519/SHA256/D4A7E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852

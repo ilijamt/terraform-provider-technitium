@@ -1,0 +1,1 @@
+terraform import technitium_settings_cache.this settings_cache

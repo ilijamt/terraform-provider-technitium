@@ -1,8 +1,12 @@
-// Package framework implements every Technitium resource from a Spec.
 package framework
 
-// Spec describes one resource. The specs are written by hand in package
-// technitium.
+import (
+	"slices"
+
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
+)
+
 type Spec struct {
 	Name        string
 	Description string
@@ -12,20 +16,19 @@ type Spec struct {
 	Update string
 	Delete string
 
-	// List names the array in the read response holding the objects; the
-	// one matching the identity attributes and Fixed is used.
-	List string
-	// Fixed parameters are sent on every call.
-	Fixed map[string]string
-	// CreateFixed parameters are sent on the create call only.
+	List        string
+	Fixed       map[string]string
 	CreateFixed map[string]string
 	// Adopt is for an object that always exists and whose update call needs
 	// every value: create reads it and updates it with the plan.
 	Adopt bool
-	// Created returns values, by attribute name, that only the create call's
-	// response holds, such as a token shown once. They go into state, and the
-	// read after create uses them to find the object.
+	// Created returns values only the create call's response holds, such as
+	// a token shown once. The read after create uses them to find the object.
 	Created func(resp map[string]any) map[string]any
+	Check   func(prior, plan map[string]tftypes.Value) error
+	// UpdateOnce is for an update call that finds the object by its old
+	// values, so resending it after a dropped connection fails.
+	UpdateOnce bool
 
 	Attrs []Attr
 }
@@ -37,102 +40,112 @@ const (
 	Bool   Type = "bool"
 	Int64  Type = "int"
 	List   Type = "list"
-	// Map is string keys to string values. The API takes "key|value|..."
-	// and returns an object.
+	// Map is sent as "key|value|..." and returned as an object.
 	Map Type = "map"
-	// Table is a set of rows with the attribute's Columns. The API takes
-	// every cell of every row joined by "|" and returns the rows as objects,
-	// in an order of its own.
+	// Table is a set of rows, sent as every cell joined by "|" and returned
+	// as objects in an order of the server's own.
 	Table Type = "table"
 )
 
-// Toggle is a Bool attribute the API changes with a call of its own for each
-// value, given the identity parameters, instead of a parameter.
+// Toggle is a Bool the API sets with a call per value instead of a parameter.
 type Toggle struct {
 	On, Off string
 }
 
-// Source is where an attribute is read when the read call does not return
-// it: the item of List in the response of Path, matched on the identity like
-// the read call's List.
+// Convert changes a String in place with a call to Path taking the identity
+// and the new value, for the changes From lists by old value; any other
+// change replaces the resource. The object comes back with the defaults of
+// its new kind, so the values left unconfigured are read again.
+type Convert struct {
+	Path string
+	From map[string][]string
+}
+
+func (c *Convert) allows(from, to string) bool {
+	return c != nil && slices.Contains(c.From[from], to)
+}
+
+// Source reads an attribute the read call lacks from the List item of
+// another call's response, matched on the identity.
 type Source struct {
 	Path, List string
 }
 
-// Column is one value in each row of a Table attribute. A List column is
-// sent with its values joined by ",".
 type Column struct {
-	Name string
-	// Key is the row object's key in the read response.
+	Name        string
 	Key         string
 	Type        Type
 	Sensitive   bool
 	Description string
-	// Pattern is a regular expression a String value must match.
-	Pattern string
+	Pattern     string
 }
 
 type Attr struct {
-	Name  string
-	Param string
-	// CreateParam names the parameter in the create call when it differs
-	// from Param.
+	Name        string
+	Param       string
 	CreateParam string
 	Type        Type
 	Description string
 	Enum        []string
-	// Pattern is a regular expression a String value must match, for values
-	// the server would store in another spelling.
-	Pattern string
-	// Empty is the value a String has when the server returns "", for a
+	// Pattern guards values the server would store in another spelling.
+	Pattern    string
+	Validators []validator.String
+	Compare    Compare
+	// Empty is what a String reads as when the server returns "", for a
 	// value it takes but stores as empty, like "." for a record's own name.
 	Empty string
-	// JSON marks a String holding JSON. Values that differ only in spacing
-	// and key order count as equal, so jsonencode(...) matches what the
-	// server keeps.
-	JSON bool
-	// Separator joins the values of a List when it is not ",".
+	// JSON values are compared by content and read back as jsonencode
+	// writes them.
+	JSON      bool
 	Separator string
-	// Columns are the row layout of a Table, in parameter order.
+	// Auto names the Map keys the server fills in itself while the named Bool
+	// attribute is on. They are ignored when matching and reading, and calls
+	// that locate the object send the value as the server stores it.
+	Auto map[string]string
+	// NewParam is the update call's parameter for the planned value of an
+	// identity attribute sent as the server stores it.
+	NewParam string
+	// Columns are in the order the API takes the cells.
 	Columns []Column
-	// Kept are the names, in a permissions Table, the server always keeps
-	// with every right. They may be left out of the configuration and must
-	// not be given less.
-	Kept []string
-	// Toggle sets a Bool through its own calls; Source reads a value the
-	// read call lacks.
-	Toggle *Toggle
-	Source *Source
+	// Kept are names in a permissions Table the server always keeps with
+	// every right; they may be left out of the configuration.
+	Kept    []string
+	Toggle  *Toggle
+	Convert *Convert
+	Source  *Source
+	// Resets names the attributes the server sets anew when this value
+	// changes; they are planned unknown unless configured.
+	Resets []string
+
+	// Default is the bool, int or string an unconfigured value takes, and
+	// what a response without Key, or with a null, reads as. The create call
+	// leaves it out.
+	Default any
 
 	// Key is the dotted path of the value in the read response. Without one
 	// the attribute keeps its configured value.
 	Key string
 
 	Required bool
-	// DataOnly attributes are only on the data source, for values that mean
-	// nothing for what the resource manages.
 	DataOnly bool
-	// ReadOnly attributes come from the server and are never configured.
-	// The update call still gets the last value read.
+	// ReadOnly values are never configured, but the update call still gets
+	// the last value read.
 	ReadOnly  bool
 	Sensitive bool
-	// Identity attributes locate the object and are sent on read, update and delete.
-	Identity bool
-	// Create and Update say which calls accept the attribute. One accepted
-	// only by Update is applied right after create.
+	Identity  bool
+	// An attribute only Update accepts is applied right after create.
 	Create bool
 	Update bool
+	// OnChange sends the value in an update only when it differs from the
+	// prior state, for values the server never returns and an update replaces.
+	OnChange bool
 }
 
-// ForceNew reports whether changing the attribute replaces the resource. A
-// read-only value changes on the server's account, never by replacing.
+// A read-only value changes on the server's account, never by replacing.
 func (a Attr) ForceNew() bool { return !a.ReadOnly && (a.Identity || !a.Update) }
 
-// Computed reports whether the server supplies the value when unset, or the
-// value is only ever read.
 func (a Attr) Computed() bool { return !a.Required && (a.Key != "" || a.ReadOnly) }
 
-// Singleton resources have no delete call: they only update server state.
 func (s Spec) Singleton() bool { return s.Delete == "" }
 
 func (s Spec) identity() []Attr {

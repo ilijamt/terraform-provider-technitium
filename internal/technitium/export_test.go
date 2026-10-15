@@ -21,8 +21,6 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/testserver"
 )
 
-// TestAccExport exports a server with tf-technitium and checks that Terraform
-// adopts everything without changes.
 func TestAccExport(t *testing.T) {
 	acceptance(t)
 	resetSSO(t)
@@ -112,18 +110,22 @@ func TestAccExport(t *testing.T) {
 		`local_group\s+= data\.technitium_group\.dns_administrators\.name`,
 		`client_secret\s+= var\.settings_sso_this_client_secret`,
 		`bind_password\s+= var\.settings_ldap_this_bind_password`,
-		`id = jsonencode\(\{`,
+		`id = "\{\\"`,
 	} {
 		require.Regexp(t, want, generated)
 	}
 	if app != "" {
 		require.Contains(t, generated, `resource "technitium_app" "split_horizon"`)
-		require.Contains(t, generated, `url  = "`+app+`"`)
+		require.NotContains(t, generated, app, "an imported app is adopted without a URL")
 		require.Regexp(t, `name\s+= technitium_app\.split_horizon\.name`, generated)
 		require.Contains(t, generated, "config = jsonencode({", "app config as HCL")
 	}
 	_, err := os.Stat(filepath.Join(out, "records_export_test.tf"))
 	require.NoError(t, err, "records are written per zone")
+	_, err = os.Stat(filepath.Join(out, "technitium_versions.tf"))
+	require.NoError(t, err, "the provider source is in a file a root module is unlikely to have")
+	_, err = os.Stat(filepath.Join(out, "versions.tf"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 
 	// Destroying the admin user or a built-in group would break the server,
 	// so the last step drops them from state first.
@@ -140,6 +142,7 @@ func TestAccExport(t *testing.T) {
 		"settings_sso_this_client_secret":              config.StringVariable("s3cret"),
 		"settings_ldap_this_bind_password":             config.StringVariable("s3cret"),
 	}
+	t.Setenv("TF_ACC_PROVIDER_NAMESPACE", "ilijamt")
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		Steps: []resource.TestStep{
@@ -158,7 +161,6 @@ func TestAccExport(t *testing.T) {
 	})
 }
 
-// readConfig joins the generated files.
 func readConfig(t *testing.T, dir string) string {
 	files, err := filepath.Glob(filepath.Join(dir, "*.tf"))
 	require.NoError(t, err)
@@ -172,9 +174,6 @@ func readConfig(t *testing.T, dir string) string {
 	return b.String()
 }
 
-// withoutResources drops the resources and their import blocks from the
-// configuration, with removed blocks that keep the objects on the server.
-// References to their attributes become the values they had.
 func withoutResources(t *testing.T, cfg string, addrs []string) string {
 	f, diags := hclwrite.ParseConfig([]byte(cfg), "generated.tf", hcl.InitialPos)
 	require.False(t, diags.HasErrors(), diags.Error())
@@ -211,9 +210,8 @@ func withoutResources(t *testing.T, cfg string, addrs []string) string {
 	return out
 }
 
-// onlyImports fails a plan that would change anything but adopt objects. The
-// exceptions set values the server never returns: user passwords, the SSO
-// client secret, the LDAP bind password and the URL an app is installed from.
+// onlyImports fails a plan that changes anything but values the server never
+// returns: passwords, the SSO client secret and app URLs.
 type onlyImports struct{}
 
 func (onlyImports) CheckPlan(_ context.Context, req plancheck.CheckPlanRequest, resp *plancheck.CheckPlanResponse) {

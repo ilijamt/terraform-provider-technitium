@@ -1,3 +1,8 @@
+variable "alice_password" {
+  type      = string
+  sensitive = true
+}
+
 resource "technitium_user" "alice" {
   username     = "alice"
   password     = var.alice_password

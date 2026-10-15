@@ -1,3 +1,5 @@
+# The zone name must be a domain name, not an IP address or CIDR; use the
+# in-addr.arpa form for a reverse zone.
 resource "technitium_zone" "home" {
   zone = "home.example.com"
 }

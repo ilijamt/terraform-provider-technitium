@@ -1,4 +1,3 @@
-# The built-in groups exist on every server: read them instead of managing them.
 data "technitium_group" "administrators" {
   name = "Administrators"
 }

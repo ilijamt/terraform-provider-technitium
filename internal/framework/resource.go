@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -13,12 +14,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -36,6 +40,7 @@ type Resource struct {
 var (
 	_ resource.ResourceWithConfigure   = (*Resource)(nil)
 	_ resource.ResourceWithImportState = (*Resource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*Resource)(nil)
 )
 
 func NewResource(spec Spec) func() resource.Resource {
@@ -76,7 +81,7 @@ func (r *Resource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 func (r *Resource) attribute(a Attr) schema.Attribute {
 	required, optional, computed := a.Required, !a.Required && !a.ReadOnly, a.Computed()
 	// A read-only value may change on any update, so it is not kept from state.
-	keep := computed && !a.ReadOnly
+	keep := computed && !a.ReadOnly && a.Default == nil
 	// A value the server does not return is unknown after import, so only
 	// a change away from a known value replaces the resource. A singleton is
 	// replaced only when it is moved to another object.
@@ -95,7 +100,11 @@ func (r *Resource) attribute(a Attr) schema.Attribute {
 		if keep {
 			pm = append(pm, boolplanmodifier.UseStateForUnknown())
 		}
-		return schema.BoolAttribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm}
+		attr := schema.BoolAttribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm}
+		if d, ok := a.Default.(bool); ok {
+			attr.Default = booldefault.StaticBool(d)
+		}
+		return attr
 	case Int64:
 		var pm []planmodifier.Int64
 		if replace {
@@ -106,7 +115,11 @@ func (r *Resource) attribute(a Attr) schema.Attribute {
 		if keep {
 			pm = append(pm, int64planmodifier.UseStateForUnknown())
 		}
-		return schema.Int64Attribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm}
+		attr := schema.Int64Attribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm}
+		if d, ok := a.Default.(int); ok {
+			attr.Default = int64default.StaticInt64(int64(d))
+		}
+		return attr
 	case Table:
 		var pm []planmodifier.Set
 		if replace {
@@ -150,24 +163,30 @@ func (r *Resource) attribute(a Attr) schema.Attribute {
 	var pm []planmodifier.String
 	if replace {
 		pm = append(pm, stringplanmodifier.RequiresReplaceIf(func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
-			resp.RequiresReplace = readable || !req.StateValue.IsNull()
+			resp.RequiresReplace = (readable || !req.StateValue.IsNull()) &&
+				!a.Convert.allows(req.StateValue.ValueString(), req.PlanValue.ValueString())
 		}, replaceDesc, replaceDesc))
 	}
 	if keep {
 		pm = append(pm, stringplanmodifier.UseStateForUnknown())
 	}
-	v := pattern(a.Pattern)
+	v := append(pattern(a.Pattern), a.Validators...)
+	if a.compare() == IPAddress {
+		v = append(v, ipValidator{})
+	}
 	if len(a.Enum) > 0 {
 		v = append(v, stringvalidator.OneOf(a.Enum...))
 	}
 	attr := schema.StringAttribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm, Validators: v}
+	if d, ok := a.Default.(string); ok {
+		attr.Default = stringdefault.StaticString(d)
+	}
 	if a.JSON {
 		attr.CustomType = jsontypes.NormalizedType{}
 	}
 	return attr
 }
 
-// columns returns the attributes of a table row; every cell is required.
 func columns(cols []Column) map[string]schema.Attribute {
 	out := map[string]schema.Attribute{}
 	for _, c := range cols {
@@ -205,7 +224,6 @@ func (r *Resource) Create(ctx context.Context, req resource.CreateRequest, resp 
 	// The object exists now, so later failures still save state and
 	// Terraform taints it instead of losing track of it.
 	state, err := r.read(ctx, plan)
-	// Attributes only the update call accepts are applied in a second step.
 	if state != nil && r.spec.Create != "" && r.hasUpdateOnly(plan) {
 		if err = r.update(ctx, state, plan); err == nil {
 			state, err = r.read(ctx, plan)
@@ -262,6 +280,61 @@ func (r *Resource) Update(ctx context.Context, req resource.UpdateRequest, resp 
 	setState(&resp.State, state)
 }
 
+func (r *Resource) ModifyPlan(_ context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	plan, err := values(req.Plan.Raw)
+	var prior, config map[string]tftypes.Value
+	if err == nil && !req.State.Raw.IsNull() {
+		prior, err = values(req.State.Raw)
+	}
+	if err == nil && r.spec.Check != nil {
+		err = r.spec.Check(prior, plan)
+	}
+	if err == nil && prior == nil {
+		return
+	}
+	if err == nil {
+		config, err = values(req.Config.Raw)
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Plan "+r.spec.Name, err.Error())
+		return
+	}
+	reset := map[string]bool{}
+	for _, a := range r.spec.Attrs {
+		if !plan[a.Name].IsKnown() || !a.matches(plan[a.Name], prior[a.Name]) {
+			for _, name := range a.Resets {
+				reset[name] = true
+			}
+		}
+	}
+	converts := r.converts(prior, plan) != nil
+	if !converts && len(reset) == 0 {
+		return
+	}
+	for _, a := range r.spec.Attrs {
+		resets := reset[a.Name] || converts && a.Computed() && !a.Identity && a.Convert == nil && a.Default == nil
+		if resets && config[a.Name].IsNull() {
+			plan[a.Name] = tftypes.NewValue(a.tf(), tftypes.UnknownValue)
+		}
+	}
+	resp.Plan.Raw = tftypes.NewValue(req.Plan.Raw.Type(), plan)
+}
+
+func (r *Resource) converts(prior, plan map[string]tftypes.Value) []Attr {
+	var out []Attr
+	for _, a := range r.spec.Attrs {
+		var from, to string
+		if a.Convert != nil && set(prior[a.Name]) && set(plan[a.Name]) &&
+			prior[a.Name].As(&from) == nil && plan[a.Name].As(&to) == nil && a.Convert.allows(from, to) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func (r *Resource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	if r.spec.Singleton() {
 		return
@@ -269,7 +342,7 @@ func (r *Resource) Delete(ctx context.Context, req resource.DeleteRequest, resp 
 	state, err := values(req.State.Raw)
 	var params url.Values
 	if err == nil {
-		params, err = r.params(state, func(a Attr) bool { return a.Identity })
+		params, err = r.identify(ctx, state)
 	}
 	if err == nil {
 		if _, err = r.client.Call(ctx, r.spec.Delete, params); client.IsNotFound(err) {
@@ -281,10 +354,9 @@ func (r *Resource) Delete(ctx context.Context, req resource.DeleteRequest, resp 
 	}
 }
 
-// ImportState takes the identity values joined by "/", in schema order. The
-// last one may itself contain "/"; an empty one is left unset. An ID starting
-// with "{" is instead a JSON object of identity attribute names to values, for
-// values that contain "/" elsewhere.
+// ImportState takes the identity values joined by "/", in schema order, where
+// only the last may contain "/". An ID starting with "{" is a JSON object of
+// identity values instead.
 func (r *Resource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	ids := r.spec.identity()
 	raws, err := importValues(req.ID, ids)
@@ -345,6 +417,16 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 	endpoint, accepts := r.spec.Create, func(a Attr) bool { return a.Create }
 	if endpoint == "" {
 		endpoint, accepts = r.spec.Update, func(a Attr) bool { return a.Update }
+		// The update call would take over an object Terraform does not manage.
+		if !r.spec.Singleton() {
+			current, err := r.read(ctx, plan)
+			if err != nil {
+				return err
+			}
+			if current != nil {
+				return fmt.Errorf("%s already exists; import it to manage it", r.spec.Name)
+			}
+		}
 	}
 	params, err := r.params(plan, func(a Attr) bool { return a.Identity || accepts(a) })
 	if err != nil {
@@ -355,6 +437,10 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 			params.Set(k, v)
 		}
 		for _, a := range r.spec.Attrs {
+			// The create call may refuse the default, such as an empty name.
+			if d, ok := a.defaultValue(); ok && d.Equal(plan[a.Name]) {
+				params.Del(a.Param)
+			}
 			if a.CreateParam != "" && params.Has(a.Param) {
 				params[a.CreateParam] = params[a.Param]
 				params.Del(a.Param)
@@ -386,26 +472,62 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 	return r.toggle(ctx, map[string]tftypes.Value{}, plan)
 }
 
-// update sends the identity and every updatable attribute that changed from
-// prior. Unknown planned values fall back to prior.
 func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Value) error {
-	params, err := r.params(prior, func(a Attr) bool { return a.Identity })
+	params, err := r.identify(ctx, prior)
 	if err != nil {
 		return err
 	}
-	changed := false
+	converts := r.converts(prior, plan)
+	var live map[string]tftypes.Value
+	if len(converts) > 0 {
+		// Another conversion in this apply, such as of a catalog zone, may
+		// have converted the object already.
+		if live, err = r.read(ctx, prior); err != nil {
+			return err
+		}
+	}
+	for _, a := range converts {
+		if live != nil && a.matches(live[a.Name], plan[a.Name]) {
+			continue
+		}
+		p := maps.Clone(params)
+		s, err := a.param(plan[a.Name])
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.Name, err)
+		}
+		p.Set(a.Param, s)
+		if _, err = r.client.Call(ctx, a.Convert.Path, p); err != nil {
+			return err
+		}
+	}
+	for _, a := range r.spec.Attrs {
+		if a.NewParam == "" || !set(plan[a.Name]) {
+			continue
+		}
+		s, err := a.param(plan[a.Name])
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.Name, err)
+		}
+		params.Set(a.NewParam, s)
+	}
+	// A conversion resets every value, so all known ones are sent again.
+	changed := len(converts) > 0
 	for _, a := range r.spec.Attrs {
 		if !a.Update || a.Identity || a.Toggle != nil {
 			continue
 		}
 		v := plan[a.Name]
-		if !v.IsKnown() {
+		if !v.IsKnown() && len(converts) == 0 {
 			v = prior[a.Name]
 		}
 		if !set(v) {
 			continue
 		}
-		changed = changed || !v.Equal(prior[a.Name])
+		differs := !v.Equal(prior[a.Name])
+		changed = changed || differs
+		if a.OnChange && !differs {
+			continue
+		}
 		s, err := a.param(v)
 		if err != nil {
 			return fmt.Errorf("%s: %w", a.Name, err)
@@ -413,15 +535,17 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 		params.Set(a.Param, s)
 	}
 	if changed {
-		if _, err = r.client.Call(ctx, r.spec.Update, params); err != nil {
+		uctx := ctx
+		if r.spec.UpdateOnce {
+			uctx = client.Once(ctx)
+		}
+		if _, err = r.client.Call(uctx, r.spec.Update, params); err != nil {
 			return err
 		}
 	}
 	return r.toggle(ctx, prior, plan)
 }
 
-// toggle calls the Toggle endpoints for the values in plan that differ from
-// prior.
 func (r *Resource) toggle(ctx context.Context, prior, plan map[string]tftypes.Value) error {
 	for _, a := range r.spec.Attrs {
 		v := plan[a.Name]
@@ -447,8 +571,6 @@ func (r *Resource) toggle(ctx context.Context, prior, plan map[string]tftypes.Va
 	return nil
 }
 
-// read fetches the object located by the identity in prior. It returns nil
-// when the object no longer exists.
 func (r *Resource) read(ctx context.Context, prior map[string]tftypes.Value) (map[string]tftypes.Value, error) {
 	params, err := r.params(prior, func(a Attr) bool { return a.Identity })
 	if err != nil {
@@ -487,30 +609,23 @@ func (r *Resource) read(ctx context.Context, prior map[string]tftypes.Value) (ma
 				continue
 			}
 		}
-		if raw, ok := lookup(from, a.Key); ok {
-			if v, err := a.fromJSON(raw); err == nil && !equivalent(a, v, prior[a.Name]) {
-				v = dropKept(a, v, prior[a.Name])
-				state[a.Name] = v
+		var v tftypes.Value
+		// A null reads as the default too, as for a member's empty catalog.
+		if raw, ok := lookup(from, a.Key); ok && (raw != nil || a.Default == nil) {
+			if v, err = a.fromJSON(raw); err != nil {
+				continue
 			}
+		} else if v, ok = a.defaultValue(); !ok {
+			continue
+		}
+		if v = r.hideAuto(a, v, from, prior[a.Name]); !equivalent(a, v, prior[a.Name]) {
+			state[a.Name] = dropKept(a, v, prior[a.Name])
 		}
 	}
 	return r.complete(state), nil
 }
 
-// find picks the list item matching Fixed and the identity values.
 func (r *Resource) find(resp map[string]any, list string, prior map[string]tftypes.Value) map[string]any {
-	type want struct {
-		attr  Attr
-		value string
-	}
-	var wants []want
-	for _, a := range r.spec.Attrs {
-		if a.Identity && a.Key != "" && set(prior[a.Name]) {
-			s, _ := a.param(prior[a.Name])
-			wants = append(wants, want{a, s})
-		}
-	}
-
 	items, _ := resp[list].([]any)
 next:
 	for _, it := range items {
@@ -523,16 +638,16 @@ next:
 				continue next
 			}
 		}
-		for _, w := range wants {
-			raw, ok := lookup(item, w.attr.Key)
+		for _, a := range r.spec.Attrs {
+			if !a.Identity || a.Key == "" || !set(prior[a.Name]) {
+				continue
+			}
+			raw, ok := lookup(item, a.Key)
 			if !ok {
 				continue
 			}
-			got, err := w.attr.fromJSON(raw)
-			if err != nil {
-				continue next
-			}
-			if g, _ := w.attr.param(got); !sameName(g, w.value) {
+			got, err := a.fromJSON(raw)
+			if err != nil || !a.matches(r.hideAuto(a, got, item, prior[a.Name]), prior[a.Name]) {
 				continue next
 			}
 		}
@@ -541,7 +656,65 @@ next:
 	return nil
 }
 
-// params collects Fixed and the selected attributes that have a value.
+func (r *Resource) identify(ctx context.Context, vals map[string]tftypes.Value) (url.Values, error) {
+	params, err := r.params(vals, func(a Attr) bool { return a.Identity })
+	auto := func(a Attr) bool { return a.Identity && len(a.Auto) > 0 }
+	if err != nil || r.spec.List == "" || !slices.ContainsFunc(r.spec.Attrs, auto) {
+		return params, err
+	}
+	resp, err := r.client.Call(ctx, r.spec.Read, params)
+	if client.IsNotFound(err) {
+		return params, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item := r.find(resp, r.spec.List, vals)
+	for _, a := range r.spec.Attrs {
+		if item == nil || !auto(a) {
+			continue
+		}
+		raw, ok := lookup(item, a.Key)
+		if !ok {
+			continue
+		}
+		v, err := a.fromJSON(raw)
+		var s string
+		if err == nil {
+			s, err = a.param(v)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", a.Name, err)
+		}
+		params.Set(a.Param, s)
+	}
+	return params, nil
+}
+
+func (r *Resource) hideAuto(a Attr, got tftypes.Value, item map[string]any, prior tftypes.Value) tftypes.Value {
+	var elems, before map[string]tftypes.Value
+	if len(a.Auto) == 0 || !set(got) || got.As(&elems) != nil {
+		return got
+	}
+	if set(prior) {
+		_ = prior.As(&before)
+	}
+	for key, flag := range a.Auto {
+		i := slices.IndexFunc(r.spec.Attrs, func(f Attr) bool { return f.Name == flag })
+		if i < 0 {
+			continue
+		}
+		if on, _ := lookup(item, r.spec.Attrs[i].Key); on != true {
+			continue
+		}
+		delete(elems, key)
+		if v, ok := before[key]; ok {
+			elems[key] = v
+		}
+	}
+	return tftypes.NewValue(got.Type(), elems)
+}
+
 func (r *Resource) params(vals map[string]tftypes.Value, include func(Attr) bool) (url.Values, error) {
 	params := url.Values{}
 	for k, v := range r.spec.Fixed {
@@ -569,7 +742,6 @@ func (r *Resource) hasUpdateOnly(plan map[string]tftypes.Value) bool {
 	return false
 }
 
-// complete fills every attribute, turns unknowns into nulls and sets the id.
 func (r *Resource) complete(state map[string]tftypes.Value) map[string]tftypes.Value {
 	var id []string
 	for _, a := range r.spec.Attrs {
@@ -591,21 +763,16 @@ func (r *Resource) complete(state map[string]tftypes.Value) map[string]tftypes.V
 	return state
 }
 
-// equivalent reports whether the server value got only differs from prior in
-// how the server normalizes it, so prior is kept: null for an empty list or
-// set, and identity names without the trailing dot or in another case, as find
-// matches them. Other strings keep the server value so case-only drift still
-// shows.
 func equivalent(a Attr, got, prior tftypes.Value) bool {
 	if !set(prior) {
 		return false
 	}
 	if got.Type().Is(tftypes.String) {
-		if !a.Identity {
-			return false
-		}
 		var g, p string
-		return set(got) && got.As(&g) == nil && prior.As(&p) == nil && sameName(g, p)
+		return set(got) && got.As(&g) == nil && prior.As(&p) == nil && a.compare().same(g, p)
+	}
+	if a.Type == Map && a.compare() == SvcParams {
+		return svcParams(got, prior)
 	}
 	var g, p []tftypes.Value
 	return (got.Type().Is(tftypes.List{}) || got.Type().Is(tftypes.Set{})) &&

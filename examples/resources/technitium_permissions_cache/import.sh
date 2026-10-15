@@ -1,0 +1,1 @@
+terraform import technitium_permissions_cache.this permissions_cache

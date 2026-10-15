@@ -12,9 +12,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// DataSource reads an object of a Spec without managing it. The identity
-// attributes are its arguments; the attributes the server returns are its
-// results.
 type DataSource struct {
 	spec   Spec
 	client API
@@ -26,8 +23,6 @@ func NewDataSource(spec Spec) func() datasource.DataSource {
 	return func() datasource.DataSource { return &DataSource{spec: spec} }
 }
 
-// attrs are the attributes of the data source: the identity, and what the
-// server returns. Values only ever sent, like passwords, are left out.
 func (d *DataSource) attrs() []Attr {
 	var out []Attr
 	for _, a := range d.spec.Attrs {
@@ -91,6 +86,9 @@ func (d *DataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp 
 				Required: required, Computed: computed, Sensitive: a.Sensitive, Description: a.Description}
 		default:
 			attr := schema.StringAttribute{Required: required, Computed: computed, Sensitive: a.Sensitive, Description: a.Description}
+			if required {
+				attr.Validators = append(pattern(a.Pattern), a.Validators...)
+			}
 			if a.JSON {
 				attr.CustomType = jsontypes.NormalizedType{}
 			}

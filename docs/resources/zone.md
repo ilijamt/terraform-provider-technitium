@@ -13,6 +13,8 @@ Manages an authoritative zone.
 ## Example Usage
 
 ```terraform
+# The zone name must be a domain name, not an IP address or CIDR; use the
+# in-addr.arpa form for a reverse zone.
 resource "technitium_zone" "home" {
   zone = "home.example.com"
 }
@@ -35,11 +37,11 @@ resource "technitium_record_fwd" "reverse" {
 
 ### Required
 
-- `zone` (String) The zone name. An IP address or a network in CIDR notation creates the matching reverse zone.
+- `zone` (String) The zone name. A reverse zone takes its `in-addr.arpa` or `ip6.arpa` name, for example `1.168.192.in-addr.arpa` for `192.168.1.0/24`. An IP address or network is refused, as the server would create the zone under the reverse name.
 
 ### Optional
 
-- `catalog` (String) The catalog zone this zone is a member of. Applies to `Primary`, `Secondary`, `Stub` and `Forwarder` zones.
+- `catalog` (String) The catalog zone this zone is a member of. Leaving it unset or empty takes the zone out of its catalog, also when it joined one outside Terraform. Applies to `Primary`, `Secondary`, `Stub` and `Forwarder` zones. A member of a `SecondaryCatalog` zone cannot leave it: set `catalog` to that zone's name.
 - `disabled` (Boolean) Disable the zone without deleting it.
 - `notify` (String) Which name servers to notify of zone changes. `Primary` and `Secondary` zones accept `None`, `ZoneNameServers`, `SpecifiedNameServers` or `BothZoneAndSpecifiedNameServers`. `Forwarder` and `Catalog` zones accept `None` or `SpecifiedNameServers`, and `Catalog` zones also `SeparateNameServersForCatalogAndMemberZones`.
 - `notify_name_servers` (List of String) The IP addresses to notify of zone changes when `notify` is `SpecifiedNameServers` or `BothZoneAndSpecifiedNameServers`. Applies to `Primary`, `Secondary`, `Forwarder` and `Catalog` zones.
@@ -52,7 +54,7 @@ resource "technitium_record_fwd" "reverse" {
 - `primary_zone_transfer_tsig_key_name` (String) The TSIG key for transferring the zone from its primary, one of the keys in `technitium_settings_tsig`. Applies to `Secondary`, `SecondaryForwarder` and `SecondaryCatalog` zones.
 - `query_access` (String) Who may query the zone: `Deny`, `Allow`, `AllowOnlyPrivateNetworks`, `AllowOnlyZoneNameServers`, `UseSpecifiedNetworkACL` or `AllowZoneNameServersAndUseSpecifiedNetworkACL`.
 - `query_access_network_acl` (List of String) The networks that may query the zone when `query_access` uses a network ACL. Each entry is an IP address or network; prefix it with `!` to deny it. Entries are checked in order, and anything unmatched is denied except loopback. An empty list clears it. Applies to all zones except `SecondaryCatalog`.
-- `type` (String) The zone type: `Primary` (default), `Secondary`, `Stub`, `Forwarder`, `SecondaryForwarder`, `Catalog` or `SecondaryCatalog`. A `Forwarder` zone starts empty: add its forwarders as `technitium_record_fwd` resources with `domain` set to the zone name.
+- `type` (String) The zone type: `Primary` (default), `Secondary`, `Stub`, `Forwarder`, `SecondaryForwarder`, `Catalog` or `SecondaryCatalog`. A `Forwarder` zone starts empty: add its forwarders as `technitium_record_fwd` resources with `domain` set to the zone name. A `Primary` zone converts in place to `Forwarder` and back, and a `Secondary`, `SecondaryForwarder` or `SecondaryCatalog` zone to `Primary`, `Forwarder` or `Catalog`, keeping its records except those the new type lacks: a `Forwarder` zone has no SOA or NS records, and a `Primary` zone no FWD records. The zone options take the new type's defaults unless configured. A signed zone cannot become a `Forwarder`. Converting a `SecondaryCatalog` zone to `Catalog` also converts its members: a `SecondaryForwarder` member becomes a `Forwarder`, and a `Secondary` member that is a `Primary` zone on the catalog's primary becomes a `Primary`, signed with its keys if it was signed. Set the new `type` on member zones managed as `technitium_zone` in the same apply, and set their `catalog` to a reference to the catalog zone so they update after it: a member the catalog already converted is not converted again. Any other change replaces the zone, which deletes all its records; the record resources in the zone plan no change until the next apply, which creates them again.
 - `update` (String) Who may send dynamic updates (RFC 2136). `Primary` zones accept `Deny`, `Allow`, `AllowOnlyZoneNameServers`, `UseSpecifiedNetworkACL` or `AllowZoneNameServersAndUseSpecifiedNetworkACL`. `Secondary` and `Forwarder` zones accept `Deny`, `Allow` or `UseSpecifiedNetworkACL`.
 - `update_network_acl` (List of String) The networks that may send dynamic updates when `update` uses a network ACL. Each entry is an IP address or network; prefix it with `!` to deny it. Entries are checked in order, and anything unmatched is denied. An empty list clears it. Applies to `Primary`, `Secondary` and `Forwarder` zones.
 - `update_security_policies` (Attributes Set) Which records each TSIG key may change through dynamic updates, one entry per key and domain. An empty set removes the policies and turns off TSIG authentication for updates. Applies to `Primary` and `Forwarder` zones. (see [below for nested schema](#nestedatt--update_security_policies))

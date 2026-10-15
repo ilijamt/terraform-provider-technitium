@@ -1,0 +1,1 @@
+terraform import technitium_settings_blocking.this settings_blocking

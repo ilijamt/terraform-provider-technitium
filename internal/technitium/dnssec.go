@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -25,10 +26,6 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/client"
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
 )
-
-// DNSSEC signing does not fit a Spec: each property changes through a call of
-// its own, the zone reports "Unsigned" rather than missing, and the algorithm
-// comes back as one name for algorithm, curve and hash. So it is written out.
 
 var (
 	dnssecKeyType = types.ObjectType{AttrTypes: map[string]attr.Type{
@@ -58,20 +55,19 @@ type dnssecDS struct {
 	Digest           string `tfsdk:"digest"`
 }
 
-// dnssecInfo is what the server reports about a signed zone.
 type dnssecInfo struct {
 	signed                 bool
 	algorithm, curve, hash string
 	nxProof                string
 	iterations, saltLength types.Int64
 	dnsKeyTTL, zskRollover types.Int64
+	kskSize, zskSize       types.Int64
 	status                 string
 	keys                   []dnssecKey
 	ds                     []dnssecDS
 	zskTags                []int64
 }
 
-// readDNSSEC reads the signing of a zone, or nil when the zone is gone.
 func readDNSSEC(ctx context.Context, api framework.API, zone string) (*dnssecInfo, error) {
 	props, err := api.Call(ctx, "/api/zones/dnssec/properties/get", url.Values{"zone": {zone}})
 	if client.IsNotFound(err) {
@@ -80,7 +76,8 @@ func readDNSSEC(ctx context.Context, api framework.API, zone string) (*dnssecInf
 	if err != nil {
 		return nil, err
 	}
-	info := &dnssecInfo{status: str(props["dnssecStatus"]), iterations: types.Int64Null(), saltLength: types.Int64Null(), zskRollover: types.Int64Null()}
+	info := &dnssecInfo{status: str(props["dnssecStatus"]), iterations: types.Int64Null(), saltLength: types.Int64Null(), zskRollover: types.Int64Null(),
+		kskSize: types.Int64Null(), zskSize: types.Int64Null()}
 	switch info.status {
 	case "SignedWithNSEC":
 		info.signed, info.nxProof = true, "NSEC"
@@ -92,6 +89,7 @@ func readDNSSEC(ctx context.Context, api framework.API, zone string) (*dnssecInf
 	}
 	info.dnsKeyTTL = num(props["dnsKeyTtl"])
 	keys, _ := props["dnssecPrivateKeys"].([]any)
+	active := map[string]int{}
 	for _, k := range keys {
 		m, _ := k.(map[string]any)
 		key := dnssecKey{KeyTag: num(m["keyTag"]).ValueInt64(), KeyType: str(m["keyType"]), Algorithm: str(m["algorithm"]),
@@ -103,6 +101,17 @@ func readDNSSEC(ctx context.Context, api framework.API, zone string) (*dnssecInf
 		if key.KeyType == "ZoneSigningKey" && m["isRetiring"] != true {
 			info.zskTags = append(info.zskTags, key.KeyTag)
 			info.zskRollover = types.Int64Value(key.RolloverDays)
+		}
+		// The active key of each type, else the last one listed.
+		size := &info.kskSize
+		if key.KeyType == "ZoneSigningKey" {
+			size = &info.zskSize
+		}
+		if bits := keySize(key.Algorithm); !bits.IsNull() && (key.State == "Active" || active[key.KeyType] == 0) {
+			*size = bits
+			if key.State == "Active" {
+				active[key.KeyType]++
+			}
 		}
 	}
 
@@ -125,8 +134,6 @@ func readDNSSEC(ctx context.Context, api framework.API, zone string) (*dnssecInf
 	return info, nil
 }
 
-// splitAlgorithm turns a DNSKEY algorithm name into the sign call's
-// algorithm, curve and hash.
 func splitAlgorithm(name string) (algorithm, curve, hash string) {
 	switch name {
 	case "ECDSAP256SHA256":
@@ -151,12 +158,23 @@ func splitAlgorithm(name string) (algorithm, curve, hash string) {
 	return name, "", ""
 }
 
+var rsaBits = regexp.MustCompile(`\((\d+) bits\)$`)
+
+// keySize reads the size of an RSA key from its algorithm, which the server
+// writes as "RSASHA256 (2048 bits)"; other algorithms have none.
+func keySize(algorithm string) types.Int64 {
+	m := rsaBits.FindStringSubmatch(algorithm)
+	if m == nil {
+		return types.Int64Null()
+	}
+	return num(m[1])
+}
+
 func str(v any) string {
 	s, _ := v.(string)
 	return s
 }
 
-// num reads a JSON number, or a number in a string, as an Int64.
 func num(v any) types.Int64 {
 	s := fmt.Sprint(v)
 	if v == nil {
@@ -176,7 +194,6 @@ func optString(s string) types.String {
 	return types.StringValue(s)
 }
 
-// zoneDNSSEC is the technitium_zone_dnssec resource.
 type zoneDNSSEC struct{ api framework.API }
 
 type zoneDNSSECModel struct {
@@ -198,8 +215,9 @@ type zoneDNSSECModel struct {
 }
 
 var (
-	_ resource.ResourceWithConfigure   = (*zoneDNSSEC)(nil)
-	_ resource.ResourceWithImportState = (*zoneDNSSEC)(nil)
+	_ resource.ResourceWithConfigure      = (*zoneDNSSEC)(nil)
+	_ resource.ResourceWithImportState    = (*zoneDNSSEC)(nil)
+	_ resource.ResourceWithValidateConfig = (*zoneDNSSEC)(nil)
 )
 
 func newZoneDNSSEC() resource.Resource { return &zoneDNSSEC{} }
@@ -224,6 +242,7 @@ const dnssecReplace = "Changing this unsigns and signs the zone again with new k
 
 func (r *zoneDNSSEC) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	keep := []planmodifier.Int64{int64planmodifier.UseStateForUnknown()}
+	keySize := []planmodifier.Int64{int64planmodifier.UseStateForUnknown(), int64planmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
 		Description: "Signs a primary zone with DNSSEC. The server manages the keys and rolls them over; `ds_records` are what the parent zone needs. " +
 			"Destroying the resource unsigns the zone. Replacing it signs the zone with new keys, which breaks validation until the parent zone has the new DS records, " +
@@ -244,12 +263,12 @@ func (r *zoneDNSSEC) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 				Description:   "The hash, for `RSA`: `MD5`, `SHA1`, `SHA256` or `SHA512`. " + dnssecReplace,
 				Validators:    []validator.String{stringvalidator.OneOf("MD5", "SHA1", "SHA256", "SHA512")},
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()}},
-			"ksk_key_size": schema.Int64Attribute{Optional: true,
-				Description:   "The key signing key size in bits, for `RSA`. The server does not return it. " + dnssecReplace,
-				PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}},
-			"zsk_key_size": schema.Int64Attribute{Optional: true,
-				Description:   "The zone signing key size in bits, for `RSA`. The server does not return it. " + dnssecReplace,
-				PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}},
+			"ksk_key_size": schema.Int64Attribute{Optional: true, Computed: true,
+				Description:   "The key signing key size in bits, for `RSA`, read from the active key signing key. Null for other algorithms. " + dnssecReplace,
+				PlanModifiers: keySize},
+			"zsk_key_size": schema.Int64Attribute{Optional: true, Computed: true,
+				Description:   "The zone signing key size in bits, for `RSA`, read from the active zone signing key. Null for other algorithms. " + dnssecReplace,
+				PlanModifiers: keySize},
 			"nx_proof": schema.StringAttribute{Optional: true, Computed: true,
 				Description:   "How non-existence is proven: `NSEC` (Technitium's default) or `NSEC3`. Changes in place.",
 				Validators:    []validator.String{stringvalidator.OneOf("NSEC", "NSEC3")},
@@ -282,6 +301,23 @@ func (r *zoneDNSSEC) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 					"digest":             schema.StringAttribute{Computed: true, Description: "The digest as a hex string."},
 				}}},
 		},
+	}
+}
+
+// ValidateConfig refuses a key size for an algorithm without one, which
+// would read back as null and replace the zone's keys on every apply.
+func (r *zoneDNSSEC) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var m zoneDNSSECModel
+	if resp.Diagnostics.Append(req.Config.Get(ctx, &m)...); resp.Diagnostics.HasError() {
+		return
+	}
+	if m.Algorithm.IsUnknown() || m.Algorithm.IsNull() || m.Algorithm.ValueString() == "RSA" {
+		return
+	}
+	for name, v := range map[string]types.Int64{"ksk_key_size": m.KSKKeySize, "zsk_key_size": m.ZSKKeySize} {
+		if !v.IsNull() && !v.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(path.Root(name), "Invalid key size", name+" only applies to RSA.")
+		}
 	}
 }
 
@@ -359,9 +395,10 @@ func (r *zoneDNSSEC) Update(ctx context.Context, req resource.UpdateRequest, res
 		}
 	}
 	if plan.NxProof.ValueString() == "NSEC3" && (changed(plan.NSEC3Iterations, prior.NSEC3Iterations) || changed(plan.NSEC3SaltLength, prior.NSEC3SaltLength)) {
+		// The server resets a parameter left out, so one not configured keeps its value.
 		params := url.Values{}
-		setInt(params, "iterations", plan.NSEC3Iterations)
-		setInt(params, "saltLength", plan.NSEC3SaltLength)
+		setInt(params, "iterations", known(plan.NSEC3Iterations, prior.NSEC3Iterations))
+		setInt(params, "saltLength", known(plan.NSEC3SaltLength, prior.NSEC3SaltLength))
 		if !call("/api/zones/dnssec/properties/updateNSEC3Params", params) {
 			return
 		}
@@ -403,7 +440,6 @@ func (r *zoneDNSSEC) ImportState(ctx context.Context, req resource.ImportStateRe
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }
 
-// refresh reads the zone after a change and saves it as the state.
 func (r *zoneDNSSEC) refresh(ctx context.Context, m *zoneDNSSECModel, state *tfsdk.State, diags *diag.Diagnostics) {
 	info, err := readDNSSEC(ctx, r.api, m.Zone.ValueString())
 	if err == nil && (info == nil || !info.signed) {
@@ -417,13 +453,12 @@ func (r *zoneDNSSEC) refresh(ctx context.Context, m *zoneDNSSECModel, state *tfs
 	diags.Append(state.Set(ctx, m)...)
 }
 
-// fill copies what the server reports into the model. Values the server does
-// not return, the key sizes, keep the model's.
 func (m *zoneDNSSECModel) fill(ctx context.Context, info *dnssecInfo) diag.Diagnostics {
 	m.ID = m.Zone
 	m.Algorithm = types.StringValue(info.algorithm)
 	m.Curve = optString(info.curve)
 	m.HashAlgorithm = optString(info.hash)
+	m.KSKKeySize, m.ZSKKeySize = info.kskSize, info.zskSize
 	m.NxProof = types.StringValue(info.nxProof)
 	m.NSEC3Iterations, m.NSEC3SaltLength = info.iterations, info.saltLength
 	m.DNSKeyTTL, m.ZSKRolloverDays = info.dnsKeyTTL, info.zskRollover
@@ -443,14 +478,19 @@ func setString(p url.Values, name string, v types.String) {
 	}
 }
 
+func known(v, fallback types.Int64) types.Int64 {
+	if v.IsUnknown() {
+		return fallback
+	}
+	return v
+}
+
 func setInt(p url.Values, name string, v types.Int64) {
 	if !v.IsNull() && !v.IsUnknown() {
 		p.Set(name, strconv.FormatInt(v.ValueInt64(), 10))
 	}
 }
 
-// zoneDNSSECData is the technitium_zone_dnssec data source: the signing of a
-// zone Terraform does not sign.
 type zoneDNSSECData struct{ api framework.API }
 
 type zoneDNSSECDataModel struct {

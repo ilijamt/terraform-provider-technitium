@@ -13,7 +13,6 @@ Reads what `technitium_group` manages, without managing it, found by `name`.
 ## Example Usage
 
 ```terraform
-# The built-in groups exist on every server: read them instead of managing them.
 data "technitium_group" "administrators" {
   name = "Administrators"
 }

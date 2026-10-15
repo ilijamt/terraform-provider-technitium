@@ -1,3 +1,8 @@
+variable "sso_client_secret" {
+  type      = string
+  sensitive = true
+}
+
 data "technitium_group" "dns_administrators" {
   name = "DNS Administrators"
 }

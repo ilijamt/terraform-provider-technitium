@@ -2,8 +2,8 @@ package technitium
 
 import "github.com/ilijamt/terraform-provider-technitium/internal/framework"
 
-// The settings_<area> resources follow the tabs of the Settings page. Each one
-// sends only its own parameters, so they do not overwrite each other.
+// Each settings area sends only its own parameters, so they do not
+// overwrite each other.
 var settings = []framework.Spec{
 	settingsArea("general", "Manages the general DNS server settings: identity, end points, zone defaults, EDNS Client Subnet, query rate limits, timeouts and sockets (the General tab of the Settings page).",
 		framework.Attr{Name: "dns_server_domain", Param: "dnsServerDomain", Type: framework.String, Key: "dnsServerDomain",
@@ -255,7 +255,7 @@ var settings = []framework.Spec{
 			Description: "The proxy's port."},
 		framework.Attr{Name: "proxy_username", Param: "proxyUsername", Type: framework.String, Key: "proxy.username",
 			Description: "The proxy username."},
-		framework.Attr{Name: "proxy_password", Param: "proxyPassword", Type: framework.String, Sensitive: true,
+		framework.Attr{Name: "proxy_password", Param: "proxyPassword", Type: framework.String, Key: "proxy.password", Sensitive: true,
 			Description: "The proxy password."},
 		framework.Attr{Name: "proxy_bypass", Param: "proxyBypass", Type: framework.List, Key: "proxy.bypass",
 			Description: "The IP addresses, networks in CIDR notation and host or domain names that never go through the proxy."},
@@ -294,8 +294,7 @@ var settings = []framework.Spec{
 	),
 }
 
-// settingsSSO is the single sign-on configuration. It has its own calls,
-// which may restart the web service to apply a change.
+// The SSO calls may restart the web service to apply a change.
 var settingsSSO = framework.Spec{
 	Name: "settings_sso",
 	Description: "Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. " +
@@ -328,8 +327,7 @@ var settingsSSO = framework.Spec{
 	},
 }
 
-// settingsLDAP is the LDAP authentication configuration. Its calls are in
-// the server but not in its API docs.
+// The LDAP calls are in the server but not in its API docs.
 var settingsLDAP = framework.Spec{
 	Name: "settings_ldap",
 	Description: "Manages LDAP authentication: users from an LDAP directory, such as Active Directory or OpenLDAP, signing in with their directory credentials, " +
@@ -370,7 +368,6 @@ var settingsLDAP = framework.Spec{
 	},
 }
 
-// qpmPrefixLimitColumns are the rows of the per subnet query rate limits.
 var qpmPrefixLimitColumns = []framework.Column{
 	{Name: "prefix", Key: "prefix", Type: framework.Int64,
 		Description: "The subnet prefix length the limits apply to."},
@@ -380,8 +377,6 @@ var qpmPrefixLimitColumns = []framework.Column{
 		Description: "The queries per minute allowed over TCP. `0` allows unlimited queries."},
 }
 
-// settingsArea returns a singleton resource that reads all settings and
-// updates its own attributes. Removing it leaves the server settings as they are.
 func settingsArea(name, description string, attrs ...framework.Attr) framework.Spec {
 	for i := range attrs {
 		attrs[i].Update = true

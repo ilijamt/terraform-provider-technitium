@@ -28,8 +28,7 @@ func (t Type) tf() tftypes.Type {
 
 func set(v tftypes.Value) bool { return v.IsKnown() && !v.IsNull() }
 
-// param renders a known, non-null value as an API parameter. Lists are comma
-// separated; an empty list is "", which the API treats as clearing it.
+// An empty list is "", which the API treats as clearing it.
 func param(v tftypes.Value, t Type) (string, error) {
 	switch t {
 	case Bool:
@@ -42,17 +41,7 @@ func param(v tftypes.Value, t Type) (string, error) {
 		i, _ := f.Int64()
 		return strconv.FormatInt(i, 10), err
 	case List:
-		var elems []tftypes.Value
-		if err := v.As(&elems); err != nil {
-			return "", err
-		}
-		out := make([]string, len(elems))
-		for i, e := range elems {
-			if err := e.As(&out[i]); err != nil {
-				return "", err
-			}
-		}
-		return strings.Join(out, ","), nil
+		return join(v, ",")
 	case Map:
 		var elems map[string]tftypes.Value
 		if err := v.As(&elems); err != nil {
@@ -77,8 +66,20 @@ func param(v tftypes.Value, t Type) (string, error) {
 	return s, err
 }
 
-// fromJSON converts a response value, or an imported string. An error means the
-// value has a shape the attribute cannot represent, so the caller keeps its own.
+func join(v tftypes.Value, sep string) (string, error) {
+	var elems []tftypes.Value
+	if err := v.As(&elems); err != nil {
+		return "", err
+	}
+	out := make([]string, len(elems))
+	for i, e := range elems {
+		if err := e.As(&out[i]); err != nil {
+			return "", err
+		}
+	}
+	return strings.Join(out, sep), nil
+}
+
 func fromJSON(raw any, t Type) (tftypes.Value, error) {
 	if raw == nil {
 		return tftypes.NewValue(t.tf(), nil), nil
@@ -132,6 +133,11 @@ func fromJSON(raw any, t Type) (tftypes.Value, error) {
 		switch v := raw.(type) {
 		case map[string]any:
 			for k, e := range v {
+				// A key without a value, such as no-default-alpn, reads as "".
+				if e == nil {
+					elems[k] = tftypes.NewValue(tftypes.String, "")
+					continue
+				}
 				s, err := scalar(e)
 				if err != nil {
 					return tftypes.Value{}, err
@@ -139,7 +145,6 @@ func fromJSON(raw any, t Type) (tftypes.Value, error) {
 				elems[k] = tftypes.NewValue(tftypes.String, s)
 			}
 		case string:
-			// An import ID part, in the "key|value|..." form the API takes.
 			cells := strings.Split(v, "|")
 			if v == "" || len(cells)%2 != 0 {
 				return tftypes.Value{}, fmt.Errorf("want key|value pairs, got %q", v)
@@ -170,7 +175,6 @@ func scalar(raw any) (string, error) {
 	return "", fmt.Errorf("not a scalar: %T", raw)
 }
 
-// lookup follows a dotted key through nested objects.
 func lookup(obj map[string]any, key string) (any, bool) {
 	var cur any = obj
 	for _, k := range strings.Split(key, ".") {
@@ -185,13 +189,7 @@ func lookup(obj map[string]any, key string) (any, bool) {
 	return cur, true
 }
 
-// sameName compares DNS names and other identity values loosely.
-func sameName(a, b string) bool {
-	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
-}
-
-// canonicalJSON spells JSON the way Terraform's jsonencode does: compact,
-// with object keys sorted. Text that is not JSON is kept as it is.
+// canonicalJSON spells JSON the way jsonencode does.
 func canonicalJSON(s string) string {
 	d := json.NewDecoder(strings.NewReader(s))
 	d.UseNumber()
@@ -206,7 +204,6 @@ func canonicalJSON(s string) string {
 	return string(b)
 }
 
-// tf is the Terraform type of the attribute.
 func (a Attr) tf() tftypes.Type {
 	if a.Type == Table {
 		return tftypes.Set{ElementType: a.row()}
@@ -222,16 +219,16 @@ func (a Attr) row() tftypes.Object {
 	return tftypes.Object{AttributeTypes: types}
 }
 
-// param renders a known, non-null value of the attribute as an API
-// parameter. A table is every cell of every row, in column order, joined by
-// "|"; no rows is "", which the API treats as clearing it.
 func (a Attr) param(v tftypes.Value) (string, error) {
 	if a.Type == List && a.Separator != "" {
-		s, err := param(v, List)
-		return strings.ReplaceAll(s, ",", a.Separator), err
+		return join(v, a.Separator)
 	}
 	if a.Type != Table {
-		return param(v, a.Type)
+		s, err := param(v, a.Type)
+		if a.Compare == ZoneName {
+			s = strings.TrimSuffix(s, ".")
+		}
+		return s, err
 	}
 	var rows []tftypes.Value
 	if err := v.As(&rows); err != nil {
@@ -254,7 +251,18 @@ func (a Attr) param(v tftypes.Value) (string, error) {
 	return strings.Join(cells, "|"), nil
 }
 
-// fromJSON converts a response value of the attribute, see fromJSON.
+func (a Attr) defaultValue() (tftypes.Value, bool) {
+	switch d := a.Default.(type) {
+	case bool:
+		return tftypes.NewValue(tftypes.Bool, d), true
+	case int:
+		return tftypes.NewValue(tftypes.Number, new(big.Float).SetInt64(int64(d))), true
+	case string:
+		return tftypes.NewValue(tftypes.String, d), true
+	}
+	return tftypes.Value{}, false
+}
+
 func (a Attr) fromJSON(raw any) (tftypes.Value, error) {
 	if a.Empty != "" && raw == "" {
 		raw = a.Empty

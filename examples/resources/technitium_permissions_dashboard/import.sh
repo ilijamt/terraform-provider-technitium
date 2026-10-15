@@ -1,0 +1,1 @@
+terraform import technitium_permissions_dashboard.this permissions_dashboard

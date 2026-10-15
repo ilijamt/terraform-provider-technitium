@@ -1,0 +1,2 @@
+# zone/domain/tlsa_certificate_usage/tlsa_selector/tlsa_matching_type/tlsa_certificate_association_data
+terraform import technitium_record_tlsa.https tlsa.example.com/_443._tcp.tlsa.example.com/DANE-EE/SPKI/SHA2-256/D4A7E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852

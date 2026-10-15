@@ -27,11 +27,8 @@ import (
 	"github.com/ilijamt/terraform-provider-technitium/internal/testserver"
 )
 
-// ownServer is set when TestMain runs the test server in Docker, so other
-// containers can reach it.
 var ownServer bool
 
-// TestMain starts a Technitium container for the acceptance tests (TF_ACC=1).
 func TestMain(m *testing.M) {
 	if os.Getenv("TF_ACC") == "" {
 		os.Exit(m.Run())
@@ -82,7 +79,6 @@ func TestSchemas(t *testing.T) {
 	}
 }
 
-// api logs in to the test server, for changes made behind Terraform's back.
 func api(t *testing.T) *client.Client {
 	c, err := login()
 	require.NoError(t, err)
@@ -98,15 +94,14 @@ func loginTo(host string) (*client.Client, error) {
 	return c, c.Login(context.Background(), testserver.Username, testserver.Password)
 }
 
-// acceptance skips a test that sets up the server before resource.Test, which
-// skips on its own, when acceptance tests are off.
+// acceptance is for tests that set up the server before resource.Test,
+// which skips on its own.
 func acceptance(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("set TF_ACC=1 to run acceptance tests")
 	}
 }
 
-// call makes an API call for setting up a test, failing it on an error.
 func call(t *testing.T, c *client.Client, path string, params url.Values) map[string]any {
 	t.Helper()
 	resp, err := c.Call(context.Background(), path, params)
@@ -114,7 +109,6 @@ func call(t *testing.T, c *client.Client, path string, params url.Values) map[st
 	return resp
 }
 
-// zonesDestroyed checks that destroy removed the zones from the server.
 func zonesDestroyed(zones ...string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		c, err := login()
@@ -173,7 +167,6 @@ resource "technitium_record_cname" "app" {
 				),
 			},
 			{
-				// Only comments change: an in-place update that keeps ttl and disable.
 				Config: config(`ip_address = "10.0.0.1"
   ttl        = 300
   disable    = true
@@ -211,8 +204,6 @@ resource "technitium_record_cname" "app" {
 	})
 }
 
-// The udm setup: a forwarder zone for reverse lookups pointing at the router.
-// The zone starts empty, so the record is its only forwarder.
 func TestAccForwarderZone(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
@@ -491,7 +482,6 @@ resource "technitium_record_a" "www" {
 				ImportStateVerifyIgnore: []string{"serial"},
 			},
 			{
-				// Destroying the resource leaves the record as it is.
 				Config: `
 resource "technitium_zone" "test" {
   zone = "soa.test"
@@ -516,8 +506,7 @@ resource "technitium_zone" "test" {
 	})
 }
 
-// recordTypes holds a record of each type not covered elsewhere, by
-// resource type. APP needs an installed DNS app, so it is left out.
+// APP needs an installed DNS app, so it is tested on its own.
 var recordTypes = map[string]string{
 	"aaaa":  `domain = "v6.types.test"` + "\n" + `ip_address = "2001:db8::1"`,
 	"ns":    `domain = "sub.types.test"` + "\n" + `name_server = "ns1.example.net"`,
@@ -616,7 +605,6 @@ resource "technitium_zone" "test" {
 				),
 			},
 			{
-				// A change made behind Terraform's back shows up as drift.
 				PreConfig: func() {
 					_, err := api(t).Call(context.Background(), "/api/zones/options/set", url.Values{
 						"zone": {"policy.test"}, "updateSecurityPolicies": {"update-key|policy.test|A"},
@@ -643,8 +631,6 @@ resource "technitium_zone" "test" {
 	})
 }
 
-// TestAccSecondaryZones transfers zones from a second server, which creating
-// a Secondary, SecondaryForwarder or Stub zone needs.
 func TestAccSecondaryZones(t *testing.T) {
 	acceptance(t)
 	if !ownServer {
@@ -710,7 +696,6 @@ resource "technitium_zone" "secfwd" {
 				),
 			},
 			{
-				// The transfer protocol changes in place.
 				Config: config("Tls", ":853"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_zone.secondary", plancheck.ResourceActionUpdate)},
@@ -779,7 +764,6 @@ resource "technitium_record_app" "www" {
 				Check: resource.TestCheckResourceAttr("technitium_record_app.www", "record_data", `{"private":["10.0.0.2"],"public":["192.0.2.1"]}`),
 			},
 			{
-				// A change made behind Terraform's back shows up as drift.
 				PreConfig: func() {
 					call(t, c, "/api/zones/records/update", url.Values{
 						"zone": {"app.test"}, "domain": {"www.app.test"}, "type": {"APP"},
@@ -861,7 +845,6 @@ resource "technitium_dhcp_reserved_lease" "printer" {
 				),
 			},
 			{
-				// The range changes in place and keeps the reservation.
 				Config: scope("192.168.50.150", tables) + lease("00-11-22-AA-BB-CC"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
@@ -872,7 +855,6 @@ resource "technitium_dhcp_reserved_lease" "printer" {
 				Check: resource.TestCheckResourceAttr("technitium_dhcp_scope.lan", "ending_address", "192.168.50.150"),
 			},
 			{
-				// A change made behind Terraform's back shows up as drift.
 				PreConfig: func() {
 					call(t, api(t), "/api/dhcp/scopes/set", url.Values{"name": {"lan"}, "dnsServers": {"192.168.50.9"}})
 				},
@@ -1051,7 +1033,6 @@ resource "technitium_permissions_zones" "this" {
 				),
 			},
 			{
-				// The password changes in place, and the new one logs in.
 				Config: config("alice", "second-secret"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_user.alice", plancheck.ResourceActionUpdate)},
@@ -1062,7 +1043,6 @@ resource "technitium_permissions_zones" "this" {
 				},
 			},
 			{
-				// A change made behind Terraform's back shows up as drift.
 				PreConfig: func() { call(t, api(t), "/api/admin/groups/set", url.Values{"group": {"Ops"}, "members": {""}}) },
 				Config:    config("alice", "second-secret"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
@@ -1173,8 +1153,6 @@ data "technitium_permissions_zones" "this" {
 	})
 }
 
-// TestAccServiceBindingSelf covers a target of "." and no parameters, which
-// the server stores and returns as empty values.
 func TestAccServiceBindingSelf(t *testing.T) {
 	config := func(ttl int) string {
 		return fmt.Sprintf(`
@@ -1216,8 +1194,6 @@ resource "technitium_record_https" "self" {
 	})
 }
 
-// resetSSO puts the SSO configuration back, so other tests and exports see
-// none.
 func resetSSO(t *testing.T) {
 	t.Cleanup(func() {
 		c, err := login()
@@ -1348,7 +1324,6 @@ data "technitium_zone_permissions" "test" {
 				),
 			},
 			{
-				// A change made behind Terraform's back shows up as drift.
 				PreConfig: func() {
 					call(t, api(t), "/api/zones/permissions/set", url.Values{"zone": {"perm.test"}, "userPermissions": {""}})
 				},
@@ -1365,8 +1340,6 @@ data "technitium_zone_permissions" "test" {
 				ImportStateVerify: true,
 			},
 			{
-				// Listing the groups the server keeps, with full rights, works
-				// too: they are kept in state and the plan settles.
 				Config: strings.Replace(config, `group_permissions = [`, `group_permissions = [
     { name = "Administrators", can_view = true, can_modify = true, can_delete = true },
     { name = "DNS Administrators", can_view = true, can_modify = true, can_delete = true },`, 1),
@@ -1376,7 +1349,6 @@ data "technitium_zone_permissions" "test" {
 				Check: resource.TestCheckResourceAttr("technitium_zone_permissions.test", "group_permissions.#", "3"),
 			},
 			{
-				// And taking them out again settles too.
 				Config: config,
 				Check:  resource.TestCheckResourceAttr("technitium_zone_permissions.test", "group_permissions.#", "1"),
 			},
@@ -1384,8 +1356,6 @@ data "technitium_zone_permissions" "test" {
 	})
 }
 
-// storeURL returns the DNS App Store download URL of an app, skipping the
-// test when the store cannot be reached.
 func storeURL(t *testing.T, name string) string {
 	resp, err := api(t).Call(context.Background(), "/api/apps/listStoreApps", nil)
 	if err != nil {
@@ -1394,7 +1364,6 @@ func storeURL(t *testing.T, name string) string {
 	return appURL(t, resp, name)
 }
 
-// tryStoreURL is storeURL that returns "" when the store cannot be reached.
 func tryStoreURL(t *testing.T, name string) string {
 	resp, err := api(t).Call(context.Background(), "/api/apps/listStoreApps", nil)
 	if err != nil {
@@ -1489,7 +1458,6 @@ resource "technitium_record_app" "www" {
 				},
 			},
 			{
-				// The same JSON spelled differently on the server is no change.
 				PreConfig: func() {
 					call(t, api(t), "/api/apps/config/set", url.Values{"name": {"Split Horizon"}, "config": {"{\r\n  \"networks\": {\r\n    \"lan\": [ \"10.0.0.0/8\" ]\r\n  }\r\n}\r\n"}})
 				},
@@ -1551,7 +1519,6 @@ data "technitium_dhcp_scope" "toggle" {
 				Check: resource.TestCheckResourceAttr("technitium_dhcp_scope.toggle", "enabled", "true"),
 			},
 			{
-				// A change made behind Terraform's back shows up as drift.
 				PreConfig: func() { call(t, api(t), "/api/dhcp/scopes/disable", url.Values{"name": {"toggle"}}) },
 				Config:    config(true),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
@@ -1671,7 +1638,6 @@ data "technitium_zone_dnssec" "test" {
 				ImportStateVerify: true,
 			},
 			{
-				// Destroying the resource unsigns the zone, which stays.
 				Config: `
 resource "technitium_zone" "test" {
   zone = "signed.test"
@@ -1689,8 +1655,6 @@ resource "technitium_zone" "test" {
 	})
 }
 
-// resetLDAP puts the LDAP configuration back, so other tests and exports
-// see none.
 func resetLDAP(t *testing.T) {
 	t.Cleanup(func() {
 		if c, err := login(); err == nil {
@@ -1824,7 +1788,6 @@ resource "technitium_settings_recursion" "this" {
 				),
 			},
 			{
-				// One area changes; the others are left alone.
 				Config: config(`[]`),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
@@ -1871,7 +1834,6 @@ resource "technitium_settings_general" "this" {
 		ProtoV6ProviderFactories: factories,
 		Steps: []resource.TestStep{
 			{
-				// Out of the server's sorted order, which a set ignores.
 				Config: config(zeta + ", " + alpha),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("technitium_settings_tsig.this", "tsig_keys.#", "2"),

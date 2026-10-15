@@ -13,8 +13,18 @@ Issues an API token for a user, for tools that call the HTTP API. The token is o
 ## Example Usage
 
 ```terraform
+variable "external_dns_password" {
+  type      = string
+  sensitive = true
+}
+
+resource "technitium_user" "token_external_dns" {
+  username = "external-dns"
+  password = var.external_dns_password
+}
+
 resource "technitium_api_token" "external_dns" {
-  username   = technitium_user.external_dns.username
+  username   = technitium_user.token_external_dns.username
   token_name = "external-dns"
 }
 

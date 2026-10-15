@@ -1,0 +1,1 @@
+terraform import technitium_permissions_administration.this permissions_administration

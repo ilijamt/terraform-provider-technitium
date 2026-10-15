@@ -1,9 +1,10 @@
-// Package provider configures the Technitium API client.
 package provider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -112,6 +113,9 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 	switch {
 	case host == "":
 		resp.Diagnostics.AddError("Missing host", "Set host or TECHNITIUM_HOST.")
+	case !validHost(host):
+		resp.Diagnostics.AddAttributeError(path.Root("host"), "Invalid host",
+			fmt.Sprintf("%q is not an http or https URL with a host, e.g. http://localhost:5380.", host))
 	case token != "" && (username != "" || password != ""):
 		resp.Diagnostics.AddError("Conflicting credentials", "Set either token, or username and password, not both.")
 	case token == "" && (username == "" || password == ""):
@@ -135,6 +139,11 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 func (p *Provider) Resources(context.Context) []func() resource.Resource { return p.resources }
 
 func (p *Provider) DataSources(context.Context) []func() datasource.DataSource { return p.dataSources }
+
+func validHost(host string) bool {
+	u, err := url.Parse(host)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != ""
+}
 
 func orEnv(v, env string) string {
 	if v != "" {

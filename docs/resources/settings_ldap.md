@@ -13,6 +13,11 @@ Manages LDAP authentication: users from an LDAP directory, such as Active Direct
 ## Example Usage
 
 ```terraform
+variable "ldap_bind_password" {
+  type      = string
+  sensitive = true
+}
+
 data "technitium_group" "dns_administrators" {
   name = "DNS Administrators"
 }

@@ -1,0 +1,1 @@
+terraform import technitium_permissions_dhcp_server.this permissions_dhcp_server

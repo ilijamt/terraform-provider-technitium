@@ -9,9 +9,8 @@ const (
 	hexBytes = `^[0-9A-F]{2}(:[0-9A-F]{2})*$`
 )
 
-// dhcpScope is a DHCP scope. The set call creates it when it does not exist
-// and changes only the parameters it gets. Its reserved leases are
-// dhcpReservedLease resources.
+// The set call creates a scope when missing and changes only the parameters
+// it gets.
 var dhcpScope = framework.Spec{
 	Name:        "dhcp_scope",
 	Description: "Manages a DHCP scope. Reserved leases are `technitium_dhcp_reserved_lease` resources.",
@@ -114,8 +113,6 @@ var dhcpScope = framework.Spec{
 	},
 }
 
-// dhcpReservedLease reserves an address in a scope for one device. There is
-// no update call, so every change replaces it.
 var dhcpReservedLease = framework.Spec{
 	Name:        "dhcp_reserved_lease",
 	Description: "Reserves an IP address in a DHCP scope for one device. Changing any attribute replaces the reservation.",

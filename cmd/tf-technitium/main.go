@@ -1,6 +1,3 @@
-// Command tf-technitium exports a Technitium DNS Server to Terraform
-// configuration: resource blocks for what is on the server, and import
-// blocks that adopt it on the next apply.
 package main
 
 import (
@@ -32,7 +29,7 @@ func main() {
 	flag.StringVar(&o.Username, "username", o.Username, "user to log in as without a token (TECHNITIUM_USERNAME); the password comes from TECHNITIUM_PASSWORD")
 	flag.BoolVar(&o.Insecure, "insecure", o.Insecure, "skip TLS certificate verification (TECHNITIUM_INSECURE)")
 	flag.StringVar(&o.Out, "out", ".", "directory to write the files to")
-	flag.BoolVar(&o.Force, "force", false, "overwrite existing files")
+	flag.BoolVar(&o.Force, "force", false, "overwrite the files this export writes and, without -type or -zone, remove the ones an earlier export wrote but this one does not")
 	flag.StringVar(&types, "type", "", "comma separated resource types to export, without technitium_; a trailing * matches a prefix (record_*)")
 	flag.StringVar(&zones, "zone", "", "comma separated zones to export with their records")
 	flag.Usage = func() {

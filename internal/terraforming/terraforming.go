@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+	"github.com/zclconf/go-cty/cty"
 
 	"github.com/ilijamt/terraform-provider-technitium/internal/client"
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
@@ -28,26 +29,18 @@ type Options struct {
 	Host, Token, Username, Password string
 	Insecure                        bool
 
-	// Out is the directory the files are written to.
-	Out string
-	// Force overwrites existing files.
+	Out   string
 	Force bool
-	// Types limits the export to these resource types, named without the
-	// technitium_ prefix. A trailing "*" matches a prefix, as in "record_*".
+	// Types are named without the technitium_ prefix; a trailing "*"
+	// matches a prefix, as in "record_*".
 	Types []string
-	// Zones limits zones and their records to these zones.
 	Zones []string
 
-	// Version is the provider version the reads run with.
-	Version string
-	// HTTPClient talks to the server; nil uses a default one.
+	Version    string
 	HTTPClient *http.Client
-	// Log gets warnings and progress.
-	Log io.Writer
+	Log        io.Writer
 }
 
-// files groups resource types into the files they are written to. Records
-// go to a file per zone instead.
 var files = []struct{ name, prefix string }{
 	{"zones.tf", "zone"},
 	{"zones.tf", "record_soa"},
@@ -77,8 +70,7 @@ func fileFor(obj object) string {
 	return "other.tf"
 }
 
-// before orders objects as they are written: by file; in zones.tf each zone
-// followed by its SOA; elsewhere by type, then label.
+// In zones.tf each zone is followed by its SOA.
 func before(a, b object) bool {
 	if fa, fb := fileFor(a), fileFor(b); fa != fb {
 		return fa < fb
@@ -92,9 +84,6 @@ func before(a, b object) bool {
 	return a.name < b.name
 }
 
-// Run exports the server into o.Out: files of resources by group, a file of
-// records per zone, imports.tf with an import block for each resource, and
-// variables.tf for the secrets the configuration does not hold.
 func Run(ctx context.Context, o Options) error {
 	if o.Log == nil {
 		o.Log = io.Discard
@@ -123,7 +112,6 @@ func Run(ctx context.Context, o Options) error {
 	}
 	objects = filter(objects, o.Types)
 
-	// Labels are given out in a stable order, apart from the file layout.
 	sort.SliceStable(objects, func(i, j int) bool {
 		if objects[i].Type != objects[j].Type {
 			return objects[i].Type < objects[j].Type
@@ -147,30 +135,11 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return fmt.Errorf("configure provider: %w", err)
 	}
-	states := map[string]map[string]tftypes.Value{}
-	var kept []object
-	for _, obj := range objects {
-		if obj.Data {
-			kept = append(kept, obj)
-			continue
-		}
-		state, err := r.read(ctx, obj.Type, obj.ID)
-		switch {
-		case err != nil:
-			warn("skipping technitium_%s %s: %s", obj.Type, obj.ID, err)
-		case state == nil:
-			warn("skipping technitium_%s %s: gone", obj.Type, obj.ID)
-		default:
-			for k, v := range obj.Fill {
-				if s, ok := state[k]; ok && s.IsNull() {
-					state[k] = tftypes.NewValue(tftypes.String, v)
-				}
-			}
-			states[obj.Type+"."+obj.name] = state
-			kept = append(kept, obj)
-		}
+	objects, states, failed := readAll(ctx, objects, r.read, warn)
+	prune := o.prune(failed)
+	if failed && o.prune(false) {
+		warn("files an earlier export wrote are not removed, since some objects could not be read")
 	}
-	objects = kept
 	refs := references(objects)
 
 	sort.SliceStable(objects, func(i, j int) bool {
@@ -201,6 +170,15 @@ func Run(ctx context.Context, o Options) error {
 		if note := keptNote(spec); note != "" {
 			b.AppendUnstructuredTokens(hclwrite.Tokens{{Type: hclsyntax.TokenComment, Bytes: []byte(note)}})
 		}
+		if obj.Type == "app_config" {
+			var config string
+			_ = states[obj.Type+"."+obj.name]["config"].As(&config)
+			if keys := secretKeys(config); len(keys) > 0 {
+				warn("technitium_app_config.%s: the config is written out in full and has keys that look like secrets (%s); keep %s private", obj.name, strings.Join(keys, ", "), fileFor(obj))
+				b.AppendUnstructuredTokens(hclwrite.Tokens{{Type: hclsyntax.TokenComment, Bytes: []byte(
+					fmt.Sprintf("# This config has keys that look like secrets (%s), written out as they are.\n", strings.Join(keys, ", ")))}})
+			}
+		}
 		isJSON := func(attr string) bool {
 			return slices.ContainsFunc(spec.Attrs, func(a framework.Attr) bool { return a.Name == attr && a.JSON })
 		}
@@ -213,11 +191,108 @@ func Run(ctx context.Context, o Options) error {
 	if len(out) == 0 {
 		return errors.New("nothing to export")
 	}
-	return write(o.Out, out, o.Force, o.Log)
+	if err := addVersions(o.Out, out, warn); err != nil {
+		return err
+	}
+	return write(o.Out, out, o.Force, prune, o.Log)
 }
 
-// keptNote is a comment naming the groups a permissions resource leaves out,
-// as the server always gives them full rights, or "" for other resources.
+func readAll(ctx context.Context, objects []object, read func(ctx context.Context, typ, id string) (map[string]tftypes.Value, error), warn func(string, ...any)) ([]object, map[string]map[string]tftypes.Value, bool) {
+	states := map[string]map[string]tftypes.Value{}
+	var kept []object
+	failed := false
+	for _, obj := range objects {
+		if obj.Data {
+			kept = append(kept, obj)
+			continue
+		}
+		state, err := read(ctx, obj.Type, obj.ID)
+		switch {
+		case err != nil:
+			failed = true
+			warn("skipping technitium_%s %s: %s", obj.Type, obj.ID, err)
+		case state == nil:
+			warn("skipping technitium_%s %s: gone", obj.Type, obj.ID)
+		default:
+			states[obj.Type+"."+obj.name] = state
+			kept = append(kept, obj)
+		}
+	}
+	return kept, states, failed
+}
+
+// addVersions adds technitium_versions.tf unless the module already has
+// required_providers: Terraform allows only one such block per module.
+func addVersions(dir string, out map[string]*hclwrite.File, warn func(string, ...any)) error {
+	name, err := declaresProviders(dir, out)
+	if err != nil {
+		return err
+	}
+	if name != "" {
+		warn("%s already has required_providers, so technitium_versions.tf is not written; add technitium = { source = \"ilijamt/technitium\" } there", filepath.Join(dir, name))
+		return nil
+	}
+	out["technitium_versions.tf"] = versions()
+	return nil
+}
+
+func declaresProviders(dir string, out map[string]*hclwrite.File) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.Type().IsRegular() || out[name] != nil || !strings.HasSuffix(name, ".tf") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return "", err
+		}
+		if strings.HasPrefix(string(src), marker) || !strings.Contains(string(src), "required_providers") {
+			continue
+		}
+		// A file with errors still yields the blocks that parsed.
+		f, _ := hclsyntax.ParseConfig(src, name, hcl.InitialPos)
+		body, ok := f.Body.(*hclsyntax.Body)
+		if !ok {
+			continue
+		}
+		for _, b := range body.Blocks {
+			if b.Type != "terraform" {
+				continue
+			}
+			for _, inner := range b.Body.Blocks {
+				if inner.Type == "required_providers" {
+					return name, nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+// prune reports whether files an earlier export wrote and this one does not
+// are removed: a filtered export, or one where a read failed, writes only
+// part of the configuration.
+func (o Options) prune(failed bool) bool {
+	return o.Force && len(o.Types) == 0 && len(o.Zones) == 0 && !failed
+}
+
+// versions names the provider's source, without which Terraform looks for
+// hashicorp/technitium. Import blocks need Terraform 1.5.
+func versions() *hclwrite.File {
+	f := hclwrite.NewEmptyFile()
+	tf := f.Body().AppendNewBlock("terraform", nil).Body()
+	tf.SetAttributeValue("required_version", cty.StringVal(">= 1.5"))
+	tf.AppendNewBlock("required_providers", nil).Body().SetAttributeValue("technitium",
+		cty.ObjectVal(map[string]cty.Value{"source": cty.StringVal("ilijamt/technitium")}))
+	return f
+}
+
 func keptNote(spec framework.Spec) string {
 	for _, a := range spec.Attrs {
 		switch len(a.Kept) {
@@ -231,13 +306,10 @@ func keptNote(spec framework.Spec) string {
 	return ""
 }
 
-// permissions reports whether a resource type holds permission lists.
 func permissions(typ string) bool {
 	return strings.HasPrefix(typ, "permissions_") || typ == "zone_permissions"
 }
 
-// references returns, for a resource type, the references to use instead of
-// the names of exported zones, scopes, users and groups.
 func references(objects []object) func(typ string) ref {
 	type key struct{ kind, name string }
 	index := map[key]hclwrite.Tokens{}
@@ -296,7 +368,6 @@ func references(objects []object) func(typ string) ref {
 	}
 }
 
-// filter keeps the objects whose type matches one of types, all when empty.
 func filter(objects []object, types []string) []object {
 	if len(types) == 0 {
 		return objects
@@ -313,7 +384,10 @@ func filter(objects []object, types []string) []object {
 	return out
 }
 
-func write(dir string, out map[string]*hclwrite.File, force bool, log io.Writer) error {
+// marker starts every file Run writes; only a file with it is removed.
+const marker = "# Generated by tf-technitium. -force overwrites it, or removes it once nothing is exported to it.\n"
+
+func write(dir string, out map[string]*hclwrite.File, force, prune bool, log io.Writer) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -327,10 +401,46 @@ func write(dir string, out map[string]*hclwrite.File, force bool, log io.Writer)
 	}
 	for _, name := range names {
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, hclwrite.Format(out[name].Bytes()), 0o644); err != nil {
+		if err := os.WriteFile(path, append([]byte(marker), hclwrite.Format(out[name].Bytes())...), 0o644); err != nil {
 			return err
 		}
 		fmt.Fprintf(log, "wrote %s\n", path)
 	}
+	if !prune {
+		return nil
+	}
+	// A file left from an earlier run, such as the records of a deleted
+	// zone, would import objects that are gone.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.Type().IsRegular() || out[name] != nil || !strings.HasSuffix(name, ".tf") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if ok, err := generated(path); err != nil {
+			return err
+		} else if !ok {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		fmt.Fprintf(log, "removed %s\n", path)
+	}
 	return nil
+}
+
+func generated(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	head := make([]byte, len(marker))
+	n, _ := io.ReadFull(f, head)
+	return string(head[:n]) == marker, nil
 }

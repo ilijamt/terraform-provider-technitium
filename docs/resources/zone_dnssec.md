@@ -13,8 +13,12 @@ Signs a primary zone with DNSSEC. The server manages the keys and rolls them ove
 ## Example Usage
 
 ```terraform
+resource "technitium_zone" "dnssec_home" {
+  zone = "home.example.com"
+}
+
 resource "technitium_zone_dnssec" "home" {
-  zone      = technitium_zone.home.zone
+  zone      = technitium_zone.dnssec_home.zone
   algorithm = "ECDSA"
   curve     = "P256"
   nx_proof  = "NSEC3"
@@ -26,7 +30,6 @@ resource "technitium_zone_dnssec" "home" {
   }
 }
 
-# The DS records to register at the parent zone.
 output "ds_records" {
   value = technitium_zone_dnssec.home.ds_records
 }
@@ -45,11 +48,11 @@ output "ds_records" {
 - `curve` (String) The curve, for `ECDSA` (`P256` or `P384`) and `EDDSA` (`ED25519` or `ED448`). Changing this unsigns and signs the zone again with new keys, which breaks validation until the parent zone has the new DS records.
 - `dns_key_ttl` (Number) The TTL of the DNSKEY records. Technitium's default is `86400`. Changes in place, but the server refuses while a key is still being published, for some hours after signing.
 - `hash_algorithm` (String) The hash, for `RSA`: `MD5`, `SHA1`, `SHA256` or `SHA512`. Changing this unsigns and signs the zone again with new keys, which breaks validation until the parent zone has the new DS records.
-- `ksk_key_size` (Number) The key signing key size in bits, for `RSA`. The server does not return it. Changing this unsigns and signs the zone again with new keys, which breaks validation until the parent zone has the new DS records.
+- `ksk_key_size` (Number) The key signing key size in bits, for `RSA`, read from the active key signing key. Null for other algorithms. Changing this unsigns and signs the zone again with new keys, which breaks validation until the parent zone has the new DS records.
 - `nsec3_iterations` (Number) The NSEC3 hash iterations, with `nx_proof` `NSEC3`. Technitium's default is `0`. Changes in place.
 - `nsec3_salt_length` (Number) The NSEC3 salt length in bytes, with `nx_proof` `NSEC3`. Technitium's default is `0`. Changes in place.
 - `nx_proof` (String) How non-existence is proven: `NSEC` (Technitium's default) or `NSEC3`. Changes in place.
-- `zsk_key_size` (Number) The zone signing key size in bits, for `RSA`. The server does not return it. Changing this unsigns and signs the zone again with new keys, which breaks validation until the parent zone has the new DS records.
+- `zsk_key_size` (Number) The zone signing key size in bits, for `RSA`, read from the active zone signing key. Null for other algorithms. Changing this unsigns and signs the zone again with new keys, which breaks validation until the parent zone has the new DS records.
 - `zsk_rollover_days` (Number) The days after which the server rolls the zone signing key over; `0` turns it off. Technitium's default is `30`. Changes in place.
 
 ### Read-Only

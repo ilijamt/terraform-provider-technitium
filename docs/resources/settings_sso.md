@@ -13,6 +13,11 @@ Manages single sign-on with OpenID Connect: the provider, sign-up rules and how 
 ## Example Usage
 
 ```terraform
+variable "sso_client_secret" {
+  type      = string
+  sensitive = true
+}
+
 data "technitium_group" "dns_administrators" {
   name = "DNS Administrators"
 }
