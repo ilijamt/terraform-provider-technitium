@@ -108,3 +108,25 @@ func TestRedirect(t *testing.T) {
 	require.Error(t, err, "302 turns the call into a GET without the form")
 	assert.Nil(t, got)
 }
+
+func TestRetryBusyReads(t *testing.T) {
+	calls := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.URL.Path]++
+		if calls[r.URL.Path] < 3 {
+			_, _ = w.Write([]byte(`{"status":"error","errorMessage":"Operation is not valid due to the current state of the object."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{}}`))
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "t0k", "test", false, nil)
+
+	_, err := c.Call(context.Background(), "/api/zones/records/get", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, calls["/api/zones/records/get"], "a busy read is tried again")
+
+	_, err = c.Call(context.Background(), "/api/zones/records/add", nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, calls["/api/zones/records/add"], "a write is not")
+}

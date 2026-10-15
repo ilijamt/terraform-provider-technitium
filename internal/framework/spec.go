@@ -67,6 +67,9 @@ type Attr struct {
 	// Pattern is a regular expression a String value must match, for values
 	// the server would store in another spelling.
 	Pattern string
+	// Empty is the value a String has when the server returns "", for a
+	// value it takes but stores as empty, like "." for a record's own name.
+	Empty string
 	// Columns are the row layout of a Table, in parameter order.
 	Columns []Column
 

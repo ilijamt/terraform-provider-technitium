@@ -58,6 +58,10 @@ func param(v tftypes.Value, t Type) (string, error) {
 		if err := v.As(&elems); err != nil {
 			return "", err
 		}
+		// The API rejects an empty value and clears with "false".
+		if len(elems) == 0 {
+			return "false", nil
+		}
 		var cells []string
 		for _, k := range slices.Sorted(maps.Keys(elems)) {
 			var s string
@@ -232,6 +236,9 @@ func (a Attr) param(v tftypes.Value) (string, error) {
 
 // fromJSON converts a response value of the attribute, see fromJSON.
 func (a Attr) fromJSON(raw any) (tftypes.Value, error) {
+	if a.Empty != "" && raw == "" {
+		raw = a.Empty
+	}
 	if a.Type != Table {
 		return fromJSON(raw, a.Type)
 	}

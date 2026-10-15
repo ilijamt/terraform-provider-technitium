@@ -142,3 +142,17 @@ func TestTableListColumn(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, rows.Equal(got), "got %s", got)
 }
+
+func TestEmptyValues(t *testing.T) {
+	s, err := param(tftypes.NewValue(Map.tf(), map[string]tftypes.Value{}), Map)
+	require.NoError(t, err)
+	assert.Equal(t, "false", s, "an empty map clears with false")
+
+	a := Attr{Name: "target", Type: String, Empty: "."}
+	got, err := a.fromJSON("")
+	require.NoError(t, err)
+	assert.True(t, str(".").Equal(got), "the server's empty value reads as Empty")
+	got, err = a.fromJSON("svc.example.com")
+	require.NoError(t, err)
+	assert.True(t, str("svc.example.com").Equal(got))
+}

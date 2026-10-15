@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 }
 
 var factories = map[string]func() (tfprotov6.ProviderServer, error){
-	"technitium": providerserver.NewProtocol6WithError(provider.New("test", nil, technitium.Resources())()),
+	"technitium": providerserver.NewProtocol6WithError(provider.New("test", nil, technitium.Resources(), technitium.DataSources())()),
 }
 
 func TestSchemas(t *testing.T) {
@@ -72,6 +72,11 @@ func TestSchemas(t *testing.T) {
 		t.Errorf("%s: %s", d.Summary, d.Detail)
 	}
 	assert.Len(t, resp.ResourceSchemas, len(technitium.Specs()))
+	assert.Len(t, resp.DataSourceSchemas, len(technitium.DataSources()))
+	for _, name := range []string{"technitium_group", "technitium_permissions_zones", "technitium_settings_general", "technitium_zone"} {
+		assert.Contains(t, resp.DataSourceSchemas, name)
+	}
+	assert.NotContains(t, resp.DataSourceSchemas, "technitium_record_a")
 	for _, name := range []string{"technitium_settings_general", "technitium_zone", "technitium_record_a", "technitium_record_fwd"} {
 		assert.Contains(t, resp.ResourceSchemas, name)
 	}
@@ -1000,11 +1005,14 @@ resource "technitium_user" "alice" {
 resource "technitium_group" "ops" {
   name        = "Ops"
   description = "Operations"
-  members     = [technitium_user.alice.username]
 }
 
-resource "technitium_permissions" "zones" {
-  section = "Zones"
+resource "technitium_group_members" "ops" {
+  group   = technitium_group.ops.name
+  members = [technitium_user.alice.username]
+}
+
+resource "technitium_permissions_zones" "this" {
   user_permissions = [
     { username = technitium_user.alice.username, can_view = true, can_modify = false, can_delete = false },
   ]
@@ -1039,8 +1047,8 @@ resource "technitium_permissions" "zones" {
 			{
 				Config: config("alice", "first-secret"),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("technitium_group.ops", "members.0", "alice"),
-					resource.TestCheckResourceAttr("technitium_permissions.zones", "group_permissions.#", "3"),
+					resource.TestCheckResourceAttr("technitium_group_members.ops", "members.0", "alice"),
+					resource.TestCheckResourceAttr("technitium_permissions_zones.this", "group_permissions.#", "3"),
 					resource.TestCheckResourceAttr("technitium_user.alice", "session_timeout_seconds", "1800"),
 				),
 			},
@@ -1060,9 +1068,9 @@ resource "technitium_permissions" "zones" {
 				PreConfig: func() { call(t, api(t), "/api/admin/groups/set", url.Values{"group": {"Ops"}, "members": {""}}) },
 				Config:    config("alice", "second-secret"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_group.ops", plancheck.ResourceActionUpdate)},
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_group_members.ops", plancheck.ResourceActionUpdate)},
 				},
-				Check: resource.TestCheckResourceAttr("technitium_group.ops", "members.#", "1"),
+				Check: resource.TestCheckResourceAttr("technitium_group_members.ops", "members.#", "1"),
 			},
 			{
 				ResourceName:            "technitium_user.alice",
@@ -1078,9 +1086,132 @@ resource "technitium_permissions" "zones" {
 				ImportStateVerify: true,
 			},
 			{
-				ResourceName:      "technitium_permissions.zones",
+				ResourceName:      "technitium_group_members.ops",
 				ImportState:       true,
-				ImportStateId:     "Zones",
+				ImportStateId:     "Ops",
+				ImportStateVerify: true,
+			},
+			{
+				ResourceName:      "technitium_permissions_zones.this",
+				ImportState:       true,
+				ImportStateId:     "permissions_zones",
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccDataSources(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             zonesDestroyed("data.test"),
+		Steps: []resource.TestStep{
+			{
+				Config: `
+data "technitium_group" "nope" {
+  name = "No Such Group"
+}
+`,
+				ExpectError: regexp.MustCompile(`not found`),
+			},
+			{
+				Config: `
+resource "technitium_zone" "test" {
+  zone = "data.test"
+}
+
+data "technitium_zone" "test" {
+  zone = technitium_zone.test.zone
+}
+
+data "technitium_group" "admins" {
+  name = "Administrators"
+}
+
+data "technitium_user" "admin" {
+  username = "admin"
+}
+
+data "technitium_settings_general" "this" {}
+
+resource "technitium_dhcp_scope" "test" {
+  name             = "data"
+  starting_address = "192.168.80.10"
+  ending_address   = "192.168.80.20"
+  subnet_mask      = "255.255.255.0"
+}
+
+data "technitium_dhcp_scope" "test" {
+  name = technitium_dhcp_scope.test.name
+}
+
+resource "technitium_group" "ops" {
+  name = "DataOps"
+}
+
+# The built-in groups the server keeps come from the data source, so only
+# the group Terraform adds is listed.
+data "technitium_permissions_zones" "this" {}
+
+resource "technitium_permissions_zones" "this" {
+  group_permissions = setunion(
+    [for p in data.technitium_permissions_zones.this.group_permissions : p if contains(["Administrators", "DNS Administrators"], p.name)],
+    [{ name = technitium_group.ops.name, can_view = true, can_modify = false, can_delete = false }],
+  )
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("data.technitium_zone.test", "type", "Primary"),
+					resource.TestCheckResourceAttr("data.technitium_group.admins", "description", "Super administrators"),
+					resource.TestCheckResourceAttr("data.technitium_user.admin", "display_name", "Administrator"),
+					resource.TestCheckNoResourceAttr("data.technitium_user.admin", "password"),
+					resource.TestCheckResourceAttrSet("data.technitium_settings_general.this", "dns_server_domain"),
+					resource.TestCheckResourceAttr("data.technitium_dhcp_scope.test", "starting_address", "192.168.80.10"),
+					resource.TestCheckTypeSetElemNestedAttrs("data.technitium_permissions_zones.this", "group_permissions.*", map[string]string{"name": "Administrators", "can_delete": "true"}),
+					resource.TestCheckResourceAttr("technitium_permissions_zones.this", "group_permissions.#", "3"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccServiceBindingSelf covers a target of "." and no parameters, which
+// the server stores and returns as empty values.
+func TestAccServiceBindingSelf(t *testing.T) {
+	config := func(ttl int) string {
+		return fmt.Sprintf(`
+resource "technitium_zone" "test" {
+  zone = "self.test"
+}
+
+resource "technitium_record_https" "self" {
+  zone            = technitium_zone.test.zone
+  domain          = "self.test"
+  svc_priority    = 1
+  svc_target_name = "."
+  svc_params      = {}
+  ttl             = %d
+}
+`, ttl)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             zonesDestroyed("self.test"),
+		Steps: []resource.TestStep{
+			{
+				Config: config(300),
+				Check:  resource.TestCheckResourceAttr("technitium_record_https.self", "svc_target_name", "."),
+			},
+			{
+				Config: config(600),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_record_https.self", plancheck.ResourceActionUpdate)},
+				},
+			},
+			{
+				ResourceName:      "technitium_record_https.self",
+				ImportState:       true,
+				ImportStateId:     `{"zone": "self.test", "domain": "self.test", "svc_priority": 1, "svc_target_name": ".", "svc_params": {}}`,
 				ImportStateVerify: true,
 			},
 		},

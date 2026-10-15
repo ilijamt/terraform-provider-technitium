@@ -18,7 +18,7 @@ import (
 func configure(t *testing.T, cfg map[string]tftypes.Value) *provider.ConfigureResponse {
 	t.Helper()
 	ctx := context.Background()
-	p := tp.New("test", nil, nil)()
+	p := tp.New("test", nil, nil, nil)()
 	var sresp provider.SchemaResponse
 	p.Schema(ctx, provider.SchemaRequest{}, &sresp)
 	typ := sresp.Schema.Type().TerraformType(ctx).(tftypes.Object)

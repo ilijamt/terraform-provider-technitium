@@ -19,9 +19,10 @@ import (
 )
 
 type Provider struct {
-	version    string
-	httpClient *http.Client
-	resources  []func() resource.Resource
+	version     string
+	httpClient  *http.Client
+	resources   []func() resource.Resource
+	dataSources []func() datasource.DataSource
 }
 
 type model struct {
@@ -32,9 +33,9 @@ type model struct {
 	Insecure types.Bool   `tfsdk:"insecure"`
 }
 
-func New(version string, httpClient *http.Client, resources []func() resource.Resource) func() provider.Provider {
+func New(version string, httpClient *http.Client, resources []func() resource.Resource, dataSources []func() datasource.DataSource) func() provider.Provider {
 	return func() provider.Provider {
-		return &Provider{version: version, httpClient: httpClient, resources: resources}
+		return &Provider{version: version, httpClient: httpClient, resources: resources, dataSources: dataSources}
 	}
 }
 
@@ -133,7 +134,7 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 
 func (p *Provider) Resources(context.Context) []func() resource.Resource { return p.resources }
 
-func (p *Provider) DataSources(context.Context) []func() datasource.DataSource { return nil }
+func (p *Provider) DataSources(context.Context) []func() datasource.DataSource { return p.dataSources }
 
 func orEnv(v, env string) string {
 	if v != "" {

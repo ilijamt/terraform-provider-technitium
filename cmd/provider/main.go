@@ -17,7 +17,7 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "run the provider with support for debuggers like delve")
 	flag.Parse()
 
-	err := providerserver.Serve(context.Background(), provider.New(version.Version, nil, technitium.Resources()), providerserver.ServeOpts{
+	err := providerserver.Serve(context.Background(), provider.New(version.Version, nil, technitium.Resources(), technitium.DataSources()), providerserver.ServeOpts{
 		Address: "registry.terraform.io/ilijamt/technitium",
 		Debug:   debug,
 	})

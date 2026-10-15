@@ -30,12 +30,52 @@ Resources:
   and APP
 - `technitium_dhcp_scope`, and `technitium_dhcp_reserved_lease` for each reserved address
 - `technitium_allowed_zone` and `technitium_blocked_zone` for domains to allow or block
-- `technitium_user`, `technitium_group` and `technitium_permissions` for access to the web console and API
+- `technitium_user`, `technitium_group`, `technitium_group_members`, and one
+  `technitium_permissions_<section>` per section of the server (dashboard,
+  zones, cache, allowed, blocked, apps, dns_client, settings, dhcp_server,
+  administration, logs) for access to the web console and API
 - one `technitium_settings_<area>` per tab of the Settings page: general,
   web_service, optional_protocols, tsig, recursion, cache, blocking,
   proxy_forwarders and logging. Each manages only its own settings.
 
+Data sources read what a resource manages without managing it, found by the
+same identity: zones and their `SOA`, settings, DHCP scopes and reserved
+leases, users, groups (the built-in ones included), group members and
+permissions.
+
 See [docs](docs/).
+
+Exporting a server
+------------------
+
+`tf-technitium` writes Terraform configuration for everything on a server, like
+[cf-terraforming](https://github.com/cloudflare/cf-terraforming) does for
+Cloudflare: a file of resources per group (`zones.tf` with each zone and its
+`SOA`, `settings.tf`, `dhcp.tf`, `blocking.tf`, `access.tf`), a
+`records_<zone>.tf` per zone, `imports.tf` with an `import` block for each, and
+`variables.tf` for the secrets it does not write out. Resources refer to each
+other (`zone = technitium_zone.home_example_com.zone`) instead of repeating
+names, and import IDs use the short `zone/domain/value` form unless a value
+needs JSON. The next `terraform apply` (Terraform 1.5 or later) adopts
+everything. SSO users, whose accounts belong to the SSO provider, are written as
+`data "technitium_user"` blocks, like the built-in groups.
+
+```shell
+make build
+export TECHNITIUM_HOST=http://dns.example.com:5380 TECHNITIUM_TOKEN=...
+./build/tf-technitium -out ./dns                      # everything
+./build/tf-technitium -out ./dns -zone home.example.com -type 'zone,record_*'
+```
+
+Every value is read through the provider, so the plan after the export shows
+no changes. The exceptions are the secrets: user passwords, which the server
+never returns, and TSIG shared secrets become sensitive variables, and the first
+apply sets each user's password to its variable. Exported users get
+`prevent_destroy`, so an existing account like `admin` is never deleted by
+accident. The built-in groups, which cannot be deleted or renamed, are written
+as `data "technitium_group"` blocks that the group members and permissions refer
+to. Permissions are written in full, `user_permissions = []` included, so
+Terraform owns each section's lists.
 
 How it works
 ------------

@@ -1,0 +1,1 @@
+terraform import technitium_permissions_zones.this permissions_zones

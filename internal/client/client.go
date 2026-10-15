@@ -82,9 +82,26 @@ func (c *Client) Login(ctx context.Context, username, password string) error {
 	return nil
 }
 
-// Call posts params to path and returns the "response" object.
+// busy is the error the server answers a read with while another request
+// changes the same data. Reading again shortly after succeeds.
+const busy = "Operation is not valid due to the current state of the object."
+
+// Call posts params to path and returns the "response" object. A read (get or
+// list) that fails because the server is busy is tried again; writes are not.
 func (c *Client) Call(ctx context.Context, path string, params url.Values) (map[string]any, error) {
-	return c.call(ctx, path, params, false)
+	read := strings.HasSuffix(path, "/get") || strings.HasSuffix(path, "/list")
+	for attempt := 1; ; attempt++ {
+		resp, err := c.call(ctx, path, params, false)
+		var e *Error
+		if !read || attempt == 5 || !errors.As(err, &e) || e.Message != busy {
+			return resp, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
+		}
+	}
 }
 
 func (c *Client) call(ctx context.Context, path string, params url.Values, root bool) (map[string]any, error) {

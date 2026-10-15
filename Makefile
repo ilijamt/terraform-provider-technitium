@@ -17,6 +17,7 @@ generate:
 build:
 	@mkdir -p build
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w $(STAMP)" -o $(BIN) ./cmd/provider
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w $(STAMP)" -o ./build/tf-technitium ./cmd/tf-technitium
 
 .PHONY: test
 test:

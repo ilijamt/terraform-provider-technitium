@@ -3,12 +3,12 @@
 page_title: "technitium_group Resource - technitium"
 subcategory: ""
 description: |-
-  Manages a user group and its members. The built-in groups (Administrators, DHCP Administrators, DNS Administrators) already exist: import them to manage their members.
+  Manages a user group. Its members are a technitium_group_members resource. Not for the built-in groups (Administrators, DHCP Administrators, DNS Administrators, Everyone), which exist on every server and cannot be deleted.
 ---
 
 # technitium_group (Resource)
 
-Manages a user group and its members. The built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) already exist: import them to manage their members.
+Manages a user group. Its members are a `technitium_group_members` resource. Not for the built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`, `Everyone`), which exist on every server and cannot be deleted.
 
 ## Example Usage
 
@@ -16,7 +16,6 @@ Manages a user group and its members. The built-in groups (`Administrators`, `DH
 resource "technitium_group" "ops" {
   name        = "Ops"
   description = "Operations"
-  members     = [technitium_user.alice.username]
 }
 ```
 
@@ -30,7 +29,6 @@ resource "technitium_group" "ops" {
 ### Optional
 
 - `description` (String) The group description.
-- `members` (List of String) The usernames of the members, in alphabetical order as the server returns them. An empty list removes all members.
 
 ### Read-Only
 

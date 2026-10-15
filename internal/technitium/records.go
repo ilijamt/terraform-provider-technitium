@@ -163,7 +163,7 @@ var addressData = []framework.Attr{
 var serviceBindingData = []framework.Attr{
 	{Name: "svc_priority", Param: "svcPriority", Type: framework.Int64, Key: "rData.svcPriority", Required: true, Identity: true,
 		Description: "The priority. `0` makes the record an alias for `svc_target_name`; otherwise lower values are preferred."},
-	{Name: "svc_target_name", Param: "svcTargetName", Type: framework.String, Key: "rData.svcTargetName", Required: true, Identity: true,
+	{Name: "svc_target_name", Param: "svcTargetName", Type: framework.String, Key: "rData.svcTargetName", Required: true, Identity: true, Empty: ".",
 		Description: "The target domain name. `.` means the record's own domain."},
 	{Name: "svc_params", Param: "svcParams", Type: framework.Map, Key: "rData.svcParams", Required: true, Identity: true,
 		Description: "The service parameters, as keys to values. For example `{ alpn = \"h2,h3\", port = \"53443\" }`."},
