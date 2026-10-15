@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math/big"
 	"net/url"
 	"strconv"
@@ -361,4 +363,105 @@ func TestImportJSON(t *testing.T) {
 		r.ImportState(context.Background(), resource.ImportStateRequest{ID: id}, resp)
 		assert.True(t, resp.Diagnostics.HasError(), id)
 	}
+}
+
+func TestReadOnlyNeverReplaces(t *testing.T) {
+	assert.False(t, Attr{Name: "is_sso_user", Type: Bool, Key: "isSsoUser", ReadOnly: true}.ForceNew())
+	assert.True(t, Attr{Name: "ptr", Type: Bool, Create: true}.ForceNew(), "a value only create takes still replaces")
+}
+
+func TestToggleAndSource(t *testing.T) {
+	spec := Spec{Name: "dhcp_scope", Read: "get", Update: "set", Delete: "delete", Attrs: []Attr{
+		{Name: "name", Param: "name", Type: String, Key: "name", Required: true, Identity: true, Update: true},
+		{Name: "dns_ttl", Param: "dnsTtl", Type: Int64, Key: "dnsTtl", Update: true},
+		{Name: "enabled", Param: "enabled", Type: Bool, Key: "enabled", Update: true,
+			Toggle: &Toggle{On: "enable", Off: "disable"}, Source: &Source{Path: "list", List: "scopes"}},
+	}}
+	api := &mockAPI{respond: func(path string, _ url.Values) (map[string]any, error) {
+		if path == "list" {
+			return map[string]any{"scopes": []any{
+				map[string]any{"name": "other", "enabled": true},
+				map[string]any{"name": "lan", "enabled": false},
+			}}, nil
+		}
+		return map[string]any{"name": "lan", "dnsTtl": json.Number("900")}, nil
+	}}
+	r := &Resource{spec: spec, client: api}
+
+	plan := map[string]tftypes.Value{"name": str("lan"), "dns_ttl": unknown(Int64), "enabled": boolean(false)}
+	require.NoError(t, r.create(context.Background(), plan))
+	assert.Equal(t, []string{"set", "disable"}, api.paths())
+	assert.False(t, api.calls[0].params.Has("enabled"), "a toggle is not a parameter")
+	assert.Equal(t, url.Values{"name": {"lan"}}, api.calls[1].params)
+
+	state, err := r.read(context.Background(), plan)
+	require.NoError(t, err)
+	assert.True(t, boolean(false).Equal(state["enabled"]), "read from the matching list item")
+	assert.True(t, num(900).Equal(state["dns_ttl"]))
+
+	api.calls = nil
+	prior := map[string]tftypes.Value{"name": str("lan"), "dns_ttl": num(900), "enabled": boolean(false)}
+	next := map[string]tftypes.Value{"name": str("lan"), "dns_ttl": num(900), "enabled": boolean(true)}
+	require.NoError(t, r.update(context.Background(), prior, next))
+	assert.Equal(t, []string{"enable"}, api.paths(), "only the toggle changed")
+}
+
+func TestCreatedValues(t *testing.T) {
+	spec := Spec{Name: "api_token", Create: "create", Read: "list", Delete: "delete", List: "sessions",
+		Created: func(resp map[string]any) map[string]any {
+			token, _ := resp["token"].(string)
+			return map[string]any{"token": token, "partial_token": token[:4]}
+		},
+		Attrs: []Attr{
+			{Name: "token_name", Param: "tokenName", Type: String, Key: "tokenName", Required: true, Create: true},
+			{Name: "partial_token", Param: "partialToken", Type: String, Key: "partialToken", Identity: true, ReadOnly: true},
+			{Name: "token", Param: "token", Type: String, Sensitive: true, ReadOnly: true},
+		}}
+	api := &mockAPI{respond: func(path string, _ url.Values) (map[string]any, error) {
+		if path == "create" {
+			return map[string]any{"token": "abcd1234"}, nil
+		}
+		return map[string]any{"sessions": []any{
+			map[string]any{"partialToken": "ffff", "tokenName": "ci"},
+			map[string]any{"partialToken": "abcd", "tokenName": "ci"},
+		}}, nil
+	}}
+	r := &Resource{spec: spec, client: api}
+	plan := map[string]tftypes.Value{"token_name": str("ci"), "partial_token": unknown(String), "token": unknown(String)}
+
+	require.NoError(t, r.create(context.Background(), plan))
+	assert.False(t, api.calls[0].params.Has("partialToken"), "not known before create")
+	state, err := r.read(context.Background(), plan)
+	require.NoError(t, err)
+	assert.True(t, str("abcd").Equal(state["partial_token"]), "found by the created identity")
+	assert.True(t, str("abcd1234").Equal(state["token"]), "the token is kept from create")
+	assert.True(t, str("abcd").Equal(state["id"]))
+}
+
+func TestCreateCutOff(t *testing.T) {
+	exists := false
+	api := &mockAPI{respond: func(path string, _ url.Values) (map[string]any, error) {
+		switch path {
+		case "add":
+			exists = true // the server got it, but the answer was lost
+			return nil, fmt.Errorf("post: %w", io.EOF)
+		case "get":
+			if !exists {
+				return map[string]any{"records": []any{}}, nil
+			}
+			return map[string]any{"records": []any{record("10.0.0.2", 60)}}, nil
+		}
+		return map[string]any{}, nil
+	}}
+	r := &Resource{spec: recordA, client: api}
+	require.NoError(t, r.create(context.Background(), identity()), "the record exists, so the create happened")
+
+	exists = false
+	api.respond = func(path string, _ url.Values) (map[string]any, error) {
+		if path == "add" {
+			return nil, fmt.Errorf("post: %w", io.EOF)
+		}
+		return map[string]any{"records": []any{}}, nil
+	}
+	assert.Error(t, r.create(context.Background(), identity()), "nothing was created")
 }

@@ -190,6 +190,22 @@ func sameName(a, b string) bool {
 	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
 }
 
+// canonicalJSON spells JSON the way Terraform's jsonencode does: compact,
+// with object keys sorted. Text that is not JSON is kept as it is.
+func canonicalJSON(s string) string {
+	d := json.NewDecoder(strings.NewReader(s))
+	d.UseNumber()
+	var v any
+	if d.Decode(&v) != nil || d.More() {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return s
+	}
+	return string(b)
+}
+
 // tf is the Terraform type of the attribute.
 func (a Attr) tf() tftypes.Type {
 	if a.Type == Table {
@@ -210,6 +226,10 @@ func (a Attr) row() tftypes.Object {
 // parameter. A table is every cell of every row, in column order, joined by
 // "|"; no rows is "", which the API treats as clearing it.
 func (a Attr) param(v tftypes.Value) (string, error) {
+	if a.Type == List && a.Separator != "" {
+		s, err := param(v, List)
+		return strings.ReplaceAll(s, ",", a.Separator), err
+	}
 	if a.Type != Table {
 		return param(v, a.Type)
 	}
@@ -238,6 +258,9 @@ func (a Attr) param(v tftypes.Value) (string, error) {
 func (a Attr) fromJSON(raw any) (tftypes.Value, error) {
 	if a.Empty != "" && raw == "" {
 		raw = a.Empty
+	}
+	if s, ok := raw.(string); ok && a.JSON {
+		raw = canonicalJSON(s)
 	}
 	if a.Type != Table {
 		return fromJSON(raw, a.Type)

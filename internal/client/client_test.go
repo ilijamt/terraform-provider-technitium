@@ -130,3 +130,32 @@ func TestRetryBusyReads(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, 1, calls["/api/zones/records/add"], "a write is not")
 }
+
+func TestRetryDroppedConnections(t *testing.T) {
+	calls := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.URL.Path]++
+		if calls[r.URL.Path] < 2 {
+			// Drop the connection, as a restarting web service does.
+			conn, _, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			_ = conn.Close()
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{}}`))
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "t0k", "test", false, nil)
+
+	_, err := c.Call(context.Background(), "/api/admin/groups/delete", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls["/api/admin/groups/delete"], "a delete is safe to repeat")
+
+	_, err = c.Call(context.Background(), "/api/zones/records/add", nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, calls["/api/zones/records/add"], "an add is not")
+
+	_, err = c.Call(context.Background(), "/api/apps/downloadAndInstall", nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, calls["/api/apps/downloadAndInstall"], "nor is an install")
+}

@@ -3,12 +3,12 @@
 page_title: "technitium_permissions_settings Resource - technitium"
 subcategory: ""
 description: |-
-  Manages who may view, modify and delete in the Settings section. The lists set here are the section's full lists: users and groups left out lose their rights, except the built-in admin groups, which the server always keeps; list those too, or take them from the data source of the same name. Destroying the resource leaves the permissions as they are.
+  Manages who may view, modify and delete in the Settings section. The lists set here are the section's full lists: users and groups left out lose their rights. The server always keeps Administrators with full rights, whatever is set: leave them out, or list them with full rights. Destroying the resource leaves the permissions as they are.
 ---
 
 # technitium_permissions_settings (Resource)
 
-Manages who may view, modify and delete in the Settings section. The lists set here are the section's full lists: users and groups left out lose their rights, except the built-in admin groups, which the server always keeps; list those too, or take them from the data source of the same name. Destroying the resource leaves the permissions as they are.
+Manages who may view, modify and delete in the Settings section. The lists set here are the section's full lists: users and groups left out lose their rights. The server always keeps `Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Destroying the resource leaves the permissions as they are.
 
 
 
@@ -17,7 +17,7 @@ Manages who may view, modify and delete in the Settings section. The lists set h
 
 ### Optional
 
-- `group_permissions` (Attributes Set) The rights of groups, including the built-in admin groups the server keeps. Leaving it out keeps the server's. (see [below for nested schema](#nestedatt--group_permissions))
+- `group_permissions` (Attributes Set) The rights of groups. The server always keeps `Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Leaving it out keeps the server's. (see [below for nested schema](#nestedatt--group_permissions))
 - `user_permissions` (Attributes Set) The rights of individual users. An empty set removes them; leaving it out keeps the server's. (see [below for nested schema](#nestedatt--user_permissions))
 
 ### Read-Only

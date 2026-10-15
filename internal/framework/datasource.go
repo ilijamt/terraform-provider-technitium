@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -89,7 +90,11 @@ func (d *DataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp 
 			attrs[a.Name] = schema.SetNestedAttribute{NestedObject: schema.NestedAttributeObject{Attributes: cols},
 				Required: required, Computed: computed, Sensitive: a.Sensitive, Description: a.Description}
 		default:
-			attrs[a.Name] = schema.StringAttribute{Required: required, Computed: computed, Sensitive: a.Sensitive, Description: a.Description}
+			attr := schema.StringAttribute{Required: required, Computed: computed, Sensitive: a.Sensitive, Description: a.Description}
+			if a.JSON {
+				attr.CustomType = jsontypes.NormalizedType{}
+			}
+			attrs[a.Name] = attr
 		}
 	}
 	desc := fmt.Sprintf("Reads what `technitium_%s` manages, without managing it.", d.spec.Name)

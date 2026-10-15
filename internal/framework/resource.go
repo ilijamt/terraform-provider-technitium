@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -38,6 +39,7 @@ var (
 )
 
 func NewResource(spec Spec) func() resource.Resource {
+	spec.Attrs = slices.DeleteFunc(slices.Clone(spec.Attrs), func(a Attr) bool { return a.DataOnly })
 	return func() resource.Resource { return &Resource{spec: spec} }
 }
 
@@ -115,8 +117,12 @@ func (r *Resource) attribute(a Attr) schema.Attribute {
 		if keep {
 			pm = append(pm, setplanmodifier.UseStateForUnknown())
 		}
+		var v []validator.Set
+		if len(a.Kept) > 0 {
+			v = append(v, keptValidator{a.Kept})
+		}
 		return schema.SetNestedAttribute{NestedObject: schema.NestedAttributeObject{Attributes: columns(a.Columns)},
-			Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm}
+			Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm, Validators: v}
 	case Map:
 		var pm []planmodifier.Map
 		if replace {
@@ -154,7 +160,11 @@ func (r *Resource) attribute(a Attr) schema.Attribute {
 	if len(a.Enum) > 0 {
 		v = append(v, stringvalidator.OneOf(a.Enum...))
 	}
-	return schema.StringAttribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm, Validators: v}
+	attr := schema.StringAttribute{Required: required, Optional: optional, Computed: computed, Sensitive: a.Sensitive, Description: a.Description, PlanModifiers: pm, Validators: v}
+	if a.JSON {
+		attr.CustomType = jsontypes.NormalizedType{}
+	}
+	return attr
 }
 
 // columns returns the attributes of a table row; every cell is required.
@@ -351,8 +361,29 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 			}
 		}
 	}
-	_, err = r.client.Call(ctx, endpoint, params)
-	return err
+	resp, err := r.client.Call(ctx, endpoint, params)
+	// A create cut off mid-way may still have happened; the object then
+	// exists. Not when create returns values only its response holds.
+	if client.IsDropped(err) && r.spec.Created == nil {
+		if state, rerr := r.read(ctx, plan); rerr == nil && state != nil {
+			err = nil
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if r.spec.Created != nil {
+		for name, raw := range r.spec.Created(resp) {
+			i := slices.IndexFunc(r.spec.Attrs, func(a Attr) bool { return a.Name == name })
+			if i < 0 {
+				return fmt.Errorf("created value for unknown attribute %s", name)
+			}
+			if plan[name], err = r.spec.Attrs[i].fromJSON(raw); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	}
+	return r.toggle(ctx, map[string]tftypes.Value{}, plan)
 }
 
 // update sends the identity and every updatable attribute that changed from
@@ -364,7 +395,7 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 	}
 	changed := false
 	for _, a := range r.spec.Attrs {
-		if !a.Update || a.Identity {
+		if !a.Update || a.Identity || a.Toggle != nil {
 			continue
 		}
 		v := plan[a.Name]
@@ -381,11 +412,39 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 		}
 		params.Set(a.Param, s)
 	}
-	if !changed {
-		return nil
+	if changed {
+		if _, err = r.client.Call(ctx, r.spec.Update, params); err != nil {
+			return err
+		}
 	}
-	_, err = r.client.Call(ctx, r.spec.Update, params)
-	return err
+	return r.toggle(ctx, prior, plan)
+}
+
+// toggle calls the Toggle endpoints for the values in plan that differ from
+// prior.
+func (r *Resource) toggle(ctx context.Context, prior, plan map[string]tftypes.Value) error {
+	for _, a := range r.spec.Attrs {
+		v := plan[a.Name]
+		if a.Toggle == nil || !set(v) || v.Equal(prior[a.Name]) {
+			continue
+		}
+		var on bool
+		if err := v.As(&on); err != nil {
+			return fmt.Errorf("%s: %w", a.Name, err)
+		}
+		endpoint := a.Toggle.Off
+		if on {
+			endpoint = a.Toggle.On
+		}
+		params, err := r.params(plan, func(a Attr) bool { return a.Identity })
+		if err != nil {
+			return err
+		}
+		if _, err = r.client.Call(ctx, endpoint, params); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // read fetches the object located by the identity in prior. It returns nil
@@ -403,19 +462,34 @@ func (r *Resource) read(ctx context.Context, prior map[string]tftypes.Value) (ma
 		return nil, err
 	}
 	if r.spec.List != "" {
-		if obj = r.find(obj, prior); obj == nil {
+		if obj = r.find(obj, r.spec.List, prior); obj == nil {
 			return nil, nil
 		}
 	}
 
+	sources := map[Source]map[string]any{}
 	state := map[string]tftypes.Value{}
 	for _, a := range r.spec.Attrs {
 		state[a.Name] = prior[a.Name]
 		if a.Key == "" {
 			continue
 		}
-		if raw, ok := lookup(obj, a.Key); ok {
+		from := obj
+		if a.Source != nil {
+			if _, ok := sources[*a.Source]; !ok {
+				resp, err := r.client.Call(ctx, a.Source.Path, params)
+				if err != nil {
+					return nil, err
+				}
+				sources[*a.Source] = r.find(resp, a.Source.List, prior)
+			}
+			if from = sources[*a.Source]; from == nil {
+				continue
+			}
+		}
+		if raw, ok := lookup(from, a.Key); ok {
 			if v, err := a.fromJSON(raw); err == nil && !equivalent(a, v, prior[a.Name]) {
+				v = dropKept(a, v, prior[a.Name])
 				state[a.Name] = v
 			}
 		}
@@ -424,7 +498,7 @@ func (r *Resource) read(ctx context.Context, prior map[string]tftypes.Value) (ma
 }
 
 // find picks the list item matching Fixed and the identity values.
-func (r *Resource) find(resp map[string]any, prior map[string]tftypes.Value) map[string]any {
+func (r *Resource) find(resp map[string]any, list string, prior map[string]tftypes.Value) map[string]any {
 	type want struct {
 		attr  Attr
 		value string
@@ -437,7 +511,7 @@ func (r *Resource) find(resp map[string]any, prior map[string]tftypes.Value) map
 		}
 	}
 
-	items, _ := resp[r.spec.List].([]any)
+	items, _ := resp[list].([]any)
 next:
 	for _, it := range items {
 		item, ok := it.(map[string]any)
@@ -474,7 +548,7 @@ func (r *Resource) params(vals map[string]tftypes.Value, include func(Attr) bool
 		params.Set(k, v)
 	}
 	for _, a := range r.spec.Attrs {
-		if !include(a) || !set(vals[a.Name]) {
+		if !include(a) || a.Toggle != nil || !set(vals[a.Name]) {
 			continue
 		}
 		s, err := a.param(vals[a.Name])

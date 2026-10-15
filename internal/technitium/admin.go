@@ -2,6 +2,7 @@ package technitium
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
 )
@@ -27,6 +28,8 @@ var user = framework.Spec{
 			Description: "Disable the account. Disabling it also ends its active sessions."},
 		{Name: "session_timeout_seconds", Param: "sessionTimeoutSeconds", Type: framework.Int64, Key: "sessionTimeoutSeconds", Update: true,
 			Description: "The seconds of inactivity after which a session expires. Technitium's default is `1800`."},
+		{Name: "is_sso_user", Param: "isSsoUser", Type: framework.Bool, Key: "isSsoUser", ReadOnly: true, DataOnly: true,
+			Description: "Whether the account comes from single sign-on. Its password, name and groups are then managed by the SSO provider."},
 	},
 }
 
@@ -63,19 +66,32 @@ var groupMembers = framework.Spec{
 }
 
 // permissionSections are the sections of the server, by the name of their
-// permissions_<name> resource.
-var permissionSections = []struct{ name, section string }{
-	{"dashboard", "Dashboard"},
-	{"zones", "Zones"},
-	{"cache", "Cache"},
-	{"allowed", "Allowed"},
-	{"blocked", "Blocked"},
-	{"apps", "Apps"},
-	{"dns_client", "DnsClient"},
-	{"settings", "Settings"},
-	{"dhcp_server", "DhcpServer"},
-	{"administration", "Administration"},
-	{"logs", "Logs"},
+// permissions_<name> resource, with the groups the server always keeps on
+// them with full rights, whatever the set call says.
+var permissionSections = []struct {
+	name, section string
+	kept          []string
+}{
+	{"dashboard", "Dashboard", []string{"Administrators"}},
+	{"zones", "Zones", []string{"Administrators", "DNS Administrators"}},
+	{"cache", "Cache", []string{"Administrators"}},
+	{"allowed", "Allowed", []string{"Administrators"}},
+	{"blocked", "Blocked", []string{"Administrators"}},
+	{"apps", "Apps", []string{"Administrators"}},
+	{"dns_client", "DnsClient", []string{"Administrators"}},
+	{"settings", "Settings", []string{"Administrators"}},
+	{"dhcp_server", "DhcpServer", []string{"Administrators", "DHCP Administrators"}},
+	{"administration", "Administration", []string{"Administrators"}},
+	{"logs", "Logs", []string{"Administrators"}},
+}
+
+// kept describes the groups the server keeps with full rights.
+func kept(groups []string) string {
+	names := make([]string, len(groups))
+	for i, g := range groups {
+		names[i] = "`" + g + "`"
+	}
+	return fmt.Sprintf("The server always keeps %s with full rights, whatever is set: leave them out, or list them with full rights. ", strings.Join(names, " and "))
 }
 
 // permissions are the user and group rights on each section of the server.
@@ -86,9 +102,8 @@ var permissions = func() []framework.Spec {
 	for _, s := range permissionSections {
 		out = append(out, framework.Spec{
 			Name: "permissions_" + s.name,
-			Description: fmt.Sprintf("Manages who may view, modify and delete in the %s section. The lists set here are the section's full lists: users and groups left out lose their rights, ", s.section) +
-				"except the built-in admin groups, which the server always keeps; list those too, or take them from the data source of the same name. " +
-				"Destroying the resource leaves the permissions as they are.",
+			Description: fmt.Sprintf("Manages who may view, modify and delete in the %s section. The lists set here are the section's full lists: users and groups left out lose their rights. ", s.section) +
+				kept(s.kept) + "Destroying the resource leaves the permissions as they are.",
 			Read:   "/api/admin/permissions/get",
 			Update: "/api/admin/permissions/set",
 			Fixed:  map[string]string{"section": s.section},
@@ -97,13 +112,64 @@ var permissions = func() []framework.Spec {
 					Columns:     rights("username", "username", "The username."),
 					Description: "The rights of individual users. An empty set removes them; leaving it out keeps the server's."},
 				{Name: "group_permissions", Param: "groupPermissions", Type: framework.Table, Key: "groupPermissions", Update: true,
-					Columns:     rights("name", "name", "The group name."),
-					Description: "The rights of groups, including the built-in admin groups the server keeps. Leaving it out keeps the server's."},
+					Columns: rights("name", "name", "The group name."), Kept: s.kept,
+					Description: "The rights of groups. " + kept(s.kept) + "Leaving it out keeps the server's."},
 			},
 		})
 	}
 	return out
 }()
+
+// apiToken is an API token of a user, a session that does not expire. Its
+// value is only in the create call's response; the session list identifies it
+// by its first 16 characters, the partial token.
+var apiToken = framework.Spec{
+	Name: "api_token",
+	Description: "Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no `token` value. " +
+		"Changing the user or name issues a new token; destroying the resource revokes it.",
+	Create: "/api/admin/sessions/createToken",
+	Read:   "/api/admin/sessions/list",
+	Delete: "/api/admin/sessions/delete",
+	List:   "sessions",
+	Created: func(resp map[string]any) map[string]any {
+		token, _ := resp["token"].(string)
+		return map[string]any{"token": token, "partial_token": token[:min(16, len(token))]}
+	},
+	Attrs: []framework.Attr{
+		{Name: "username", Param: "user", Type: framework.String, Key: "username", Required: true, Create: true, Pattern: username,
+			Description: "The user the token acts as, in lower case."},
+		{Name: "token_name", Param: "tokenName", Type: framework.String, Key: "tokenName", Required: true, Create: true,
+			Description: "A name for the token. Names need not be unique."},
+		{Name: "partial_token", Param: "partialToken", Type: framework.String, Key: "partialToken", Identity: true, ReadOnly: true,
+			Description: "The first 16 characters of the token, which the server shows to identify it. It is the import ID."},
+		{Name: "token", Param: "token", Type: framework.String, Sensitive: true, ReadOnly: true,
+			Description: "The token, for the `Authorization: Bearer` header or the provider's `token`."},
+	},
+}
+
+// zoneKept are the groups the server keeps with full rights on every zone.
+var zoneKept = []string{"Administrators", "DNS Administrators"}
+
+// zonePermissions are the user and group rights on one zone, on top of the
+// Zones section's. There is nothing to create or delete: the resource sets
+// the zone's lists, and destroying it leaves them as they are.
+var zonePermissions = framework.Spec{
+	Name: "zone_permissions",
+	Description: "Manages who may view, modify and delete one zone, on top of `technitium_permissions_zones`. The lists set here are the zone's full lists: users and groups left out lose their rights to it. " +
+		kept(zoneKept) + "Destroying the resource leaves the permissions as they are.",
+	Read:   "/api/zones/permissions/get",
+	Update: "/api/zones/permissions/set",
+	Attrs: []framework.Attr{
+		{Name: "zone", Param: "zone", Type: framework.String, Key: "subItem", Required: true, Identity: true, Update: true,
+			Description: "The zone. Changing it moves the resource to another zone."},
+		{Name: "user_permissions", Param: "userPermissions", Type: framework.Table, Key: "userPermissions", Update: true,
+			Columns:     rights("username", "username", "The username."),
+			Description: "The rights of individual users on the zone. An empty set removes them; leaving it out keeps the server's."},
+		{Name: "group_permissions", Param: "groupPermissions", Type: framework.Table, Key: "groupPermissions", Update: true,
+			Columns: rights("name", "name", "The group name."), Kept: zoneKept,
+			Description: "The rights of groups on the zone. " + kept(zoneKept) + "Leaving it out keeps the server's."},
+	},
+}
 
 // rights are the columns of a permission row: who, then view, modify and
 // delete, in the order the set call takes them.

@@ -144,7 +144,7 @@ var records = []framework.Spec{
 			Description: "The name of the installed DNS app that answers for the record."},
 		framework.Attr{Name: "class_path", Param: "classPath", Type: framework.String, Key: "rData.classPath", Required: true,
 			Description: "The class in the DNS app that handles the record."},
-		framework.Attr{Name: "record_data", Param: "recordData", Type: framework.String, Key: "rData.data",
+		framework.Attr{Name: "record_data", Param: "recordData", Type: framework.String, Key: "rData.data", JSON: true,
 			Description: "The record data, in the format the DNS app expects."},
 	),
 }

@@ -22,6 +22,10 @@ type Spec struct {
 	// Adopt is for an object that always exists and whose update call needs
 	// every value: create reads it and updates it with the plan.
 	Adopt bool
+	// Created returns values, by attribute name, that only the create call's
+	// response holds, such as a token shown once. They go into state, and the
+	// read after create uses them to find the object.
+	Created func(resp map[string]any) map[string]any
 
 	Attrs []Attr
 }
@@ -41,6 +45,19 @@ const (
 	// in an order of its own.
 	Table Type = "table"
 )
+
+// Toggle is a Bool attribute the API changes with a call of its own for each
+// value, given the identity parameters, instead of a parameter.
+type Toggle struct {
+	On, Off string
+}
+
+// Source is where an attribute is read when the read call does not return
+// it: the item of List in the response of Path, matched on the identity like
+// the read call's List.
+type Source struct {
+	Path, List string
+}
 
 // Column is one value in each row of a Table attribute. A List column is
 // sent with its values joined by ",".
@@ -70,14 +87,31 @@ type Attr struct {
 	// Empty is the value a String has when the server returns "", for a
 	// value it takes but stores as empty, like "." for a record's own name.
 	Empty string
+	// JSON marks a String holding JSON. Values that differ only in spacing
+	// and key order count as equal, so jsonencode(...) matches what the
+	// server keeps.
+	JSON bool
+	// Separator joins the values of a List when it is not ",".
+	Separator string
 	// Columns are the row layout of a Table, in parameter order.
 	Columns []Column
+	// Kept are the names, in a permissions Table, the server always keeps
+	// with every right. They may be left out of the configuration and must
+	// not be given less.
+	Kept []string
+	// Toggle sets a Bool through its own calls; Source reads a value the
+	// read call lacks.
+	Toggle *Toggle
+	Source *Source
 
 	// Key is the dotted path of the value in the read response. Without one
 	// the attribute keeps its configured value.
 	Key string
 
 	Required bool
+	// DataOnly attributes are only on the data source, for values that mean
+	// nothing for what the resource manages.
+	DataOnly bool
 	// ReadOnly attributes come from the server and are never configured.
 	// The update call still gets the last value read.
 	ReadOnly  bool
@@ -90,11 +124,13 @@ type Attr struct {
 	Update bool
 }
 
-// ForceNew reports whether changing the attribute replaces the resource.
-func (a Attr) ForceNew() bool { return a.Identity || !a.Update }
+// ForceNew reports whether changing the attribute replaces the resource. A
+// read-only value changes on the server's account, never by replacing.
+func (a Attr) ForceNew() bool { return !a.ReadOnly && (a.Identity || !a.Update) }
 
-// Computed reports whether the server supplies the value when unset.
-func (a Attr) Computed() bool { return !a.Required && a.Key != "" }
+// Computed reports whether the server supplies the value when unset, or the
+// value is only ever read.
+func (a Attr) Computed() bool { return !a.Required && (a.Key != "" || a.ReadOnly) }
 
 // Singleton resources have no delete call: they only update server state.
 func (s Spec) Singleton() bool { return s.Delete == "" }

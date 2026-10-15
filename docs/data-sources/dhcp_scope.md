@@ -31,6 +31,7 @@ Reads what `technitium_dhcp_scope` manages, without managing it, found by `name`
 - `dns_updates` (Boolean) Add and remove forward and reverse DNS records for clients in `domain_name`.
 - `domain_name` (String) The domain name of the network (option 15). With `dns_updates`, clients get forward and reverse DNS records in it.
 - `domain_search_list` (List of String) The domain names clients append when resolving short names (option 119).
+- `enabled` (Boolean) Whether the scope hands out addresses. Technitium enables a new scope; it serves only on a network interface in the scope's subnet.
 - `ending_address` (String) The last IP address the scope hands out.
 - `exclusions` (Attributes Set) Address ranges in the scope that are never handed out dynamically. An empty set removes them. (see [below for nested schema](#nestedatt--exclusions))
 - `generic_options` (Attributes Set) DHCP options without an attribute of their own. An empty set removes them. (see [below for nested schema](#nestedatt--generic_options))

@@ -24,4 +24,5 @@ Reads what `technitium_user` manages, without managing it, found by `username`.
 - `disabled` (Boolean) Disable the account. Disabling it also ends its active sessions.
 - `display_name` (String) The display name.
 - `id` (String) The identifier, as the resource has it.
+- `is_sso_user` (Boolean) Whether the account comes from single sign-on. Its password, name and groups are then managed by the SSO provider.
 - `session_timeout_seconds` (Number) The seconds of inactivity after which a session expires. Technitium's default is `1800`.

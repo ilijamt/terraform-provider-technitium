@@ -25,6 +25,9 @@ type object struct {
 	ID string
 	// Zone is the zone a zone, SOA or record object belongs to.
 	Zone string
+	// Fill holds values the server does not read back, written for
+	// attributes the read leaves unset.
+	Fill map[string]string
 	// Data marks an object Terraform cannot delete, written as a data
 	// source found by Identity.
 	Data     bool
@@ -50,7 +53,7 @@ type lister struct {
 func (l *lister) list(ctx context.Context) ([]object, error) {
 	var out []object
 	for _, step := range []func(context.Context) ([]object, error){
-		l.listZones, l.listSettings, l.listDHCP, l.listBlocking, l.listAccess,
+		l.listZones, l.listSettings, l.listDHCP, l.listBlocking, l.listAccess, l.listApps,
 	} {
 		objs, err := step(ctx)
 		if err != nil {
@@ -75,12 +78,16 @@ func (l *lister) listZones(ctx context.Context) ([]object, error) {
 		if name == "" || (len(l.zones) > 0 && !slices.ContainsFunc(l.zones, func(s string) bool { return strings.EqualFold(s, name) })) {
 			continue
 		}
-		out = append(out, object{Type: "zone", Label: name, ID: name, Zone: name})
+		out = append(out, object{Type: "zone", Label: name, ID: name, Zone: name},
+			object{Type: "zone_permissions", Label: name, ID: name, Zone: name})
 		// Other zone types are copied from elsewhere, not edited here.
 		if typ != "Primary" && typ != "Forwarder" {
 			continue
 		}
 		out = append(out, object{Type: "record_soa", Label: name, ID: name + "/" + name, Zone: name})
+		if status, _ := z["dnssecStatus"].(string); strings.HasPrefix(status, "Signed") {
+			out = append(out, object{Type: "zone_dnssec", Label: name, ID: name, Zone: name})
+		}
 
 		records, err := l.api.Call(ctx, "/api/zones/records/get", url.Values{"zone": {name}, "domain": {name}, "listZone": {"true"}})
 		if err != nil {
@@ -270,6 +277,30 @@ func (l *lister) listAccess(ctx context.Context) ([]object, error) {
 		if c.typ == "group" {
 			out = append(out, object{Type: c.typ, Label: "Everyone", ID: "Everyone", Data: true, Identity: map[string]string{"name": "Everyone"}})
 		}
+	}
+	return out, nil
+}
+
+// listApps returns the installed apps with their config. The server does not
+// return the URL an app came from, so its DNS App Store URL is used; an app
+// installed some other way has none and is not exported.
+func (l *lister) listApps(ctx context.Context) ([]object, error) {
+	resp, err := l.api.Call(ctx, "/api/apps/list", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []object
+	for _, a := range items(resp, "apps") {
+		name, _ := a["name"].(string)
+		if name == "" {
+			continue
+		}
+		if url, _ := a["updateUrl"].(string); url != "" {
+			out = append(out, object{Type: "app", Label: name, ID: name, Fill: map[string]string{"url": url}})
+		} else {
+			l.warn("skipping app %s: not from the DNS App Store, so there is no URL to install it from", name)
+		}
+		out = append(out, object{Type: "app_config", Label: name, ID: name})
 	}
 	return out, nil
 }

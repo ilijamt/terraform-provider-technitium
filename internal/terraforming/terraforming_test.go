@@ -127,7 +127,7 @@ func TestResourceBlockSecrets(t *testing.T) {
 	}
 
 	f := hclwrite.NewEmptyFile()
-	vars := resourceBlock(f.Body(), "user", "alice", schema, state, nil)
+	vars := resourceBlock(f.Body(), "user", "alice", schema, state, nil, nil)
 	got := string(hclwrite.Format(f.Bytes()))
 
 	assert.Contains(t, got, `username = "alice"`)
@@ -171,4 +171,52 @@ func TestListReadsSSOUsers(t *testing.T) {
 	assert.Equal(t, []string{"admin"}, users)
 	assert.Equal(t, []string{"someone@example.com"}, data, "an SSO user is a data source")
 	assert.Empty(t, warnings)
+}
+
+func TestSSOClientSecret(t *testing.T) {
+	schema := &tfprotov6.Schema{Block: &tfprotov6.SchemaBlock{Attributes: []*tfprotov6.SchemaAttribute{
+		{Name: "client_id", Type: tftypes.String, Optional: true, Computed: true},
+		{Name: "client_secret", Type: tftypes.String, Optional: true, Sensitive: true},
+	}}}
+	render := func(clientID string) string {
+		f := hclwrite.NewEmptyFile()
+		resourceBlock(f.Body(), "settings_sso", "this", schema, map[string]tftypes.Value{
+			"client_id":     tftypes.NewValue(tftypes.String, clientID),
+			"client_secret": tftypes.NewValue(tftypes.String, nil),
+		}, nil, nil)
+		return string(f.Bytes())
+	}
+	assert.Contains(t, render("technitium"), "var.settings_sso_this_client_secret", "a configured client needs its secret")
+	assert.NotContains(t, render(""), "client_secret", "no client, no secret")
+}
+
+func TestJSONEncode(t *testing.T) {
+	got, ok := jsonencode("{\r\n  \"enableLogging\": true,\r\n  \"maxLogDays\": 7,\r\n  \"path\": \"q.db\",\r\n  \"networks\": { \"lan\": [\"10.0.0.0/8\"] }\r\n}")
+	require.True(t, ok)
+	f := hclwrite.NewEmptyFile()
+	f.Body().SetAttributeRaw("config", got)
+	assert.Equal(t, `config = jsonencode({
+  enableLogging = true
+  maxLogDays    = 7
+  networks = {
+    lan = ["10.0.0.0/8"]
+  }
+  path = "q.db"
+})
+`, string(hclwrite.Format(f.Bytes())))
+
+	_, ok = jsonencode("export.test/www.export.test/10.0.0.1")
+	assert.False(t, ok, "not JSON")
+	_, ok = jsonencode(`"just a string"`)
+	assert.False(t, ok, "only objects and arrays")
+}
+
+func TestKeptNote(t *testing.T) {
+	note := func(kept ...string) string {
+		return keptNote(framework.Spec{Attrs: []framework.Attr{{Name: "group_permissions", Kept: kept}}})
+	}
+	assert.Equal(t, "# Administrators always has full rights here: the server adds it, so it is not listed.\n", note("Administrators"))
+	assert.Equal(t, "# Administrators and DNS Administrators always have full rights here: the server adds them, so they are not listed.\n",
+		note("Administrators", "DNS Administrators"))
+	assert.Empty(t, keptNote(framework.Spec{Attrs: []framework.Attr{{Name: "zone"}}}))
 }

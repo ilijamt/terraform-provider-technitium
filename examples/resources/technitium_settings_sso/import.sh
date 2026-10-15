@@ -1,0 +1,1 @@
+terraform import technitium_settings_sso.this settings_sso

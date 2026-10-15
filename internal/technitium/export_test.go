@@ -25,7 +25,18 @@ import (
 // adopts everything without changes.
 func TestAccExport(t *testing.T) {
 	acceptance(t)
+	resetSSO(t)
+	resetLDAP(t)
 	c := api(t)
+	// The app needs the DNS App Store; without it the export runs without.
+	// It goes in before the SSO change below restarts the web service.
+	app := tryStoreURL(t, "Split Horizon")
+	if app != "" {
+		call(t, c, "/api/apps/downloadAndInstall", url.Values{"name": {"Split Horizon"}, "url": {app}})
+		t.Cleanup(func() {
+			_, _ = c.Call(context.Background(), "/api/apps/uninstall", url.Values{"name": {"Split Horizon"}})
+		})
+	}
 	for _, step := range []struct {
 		path   string
 		params url.Values
@@ -36,6 +47,7 @@ func TestAccExport(t *testing.T) {
 		{"/api/zones/records/add", url.Values{"zone": {"export.test"}, "domain": {"export.test"}, "type": {"TXT"}, "text": {"v=spf1 ip4:10.0.0.0/8 -all"}}},
 		{"/api/zones/records/add", url.Values{"zone": {"export.test"}, "domain": {"export.test"}, "type": {"MX"}, "exchange": {"mail.export.test"}, "preference": {"10"}}},
 		{"/api/zones/records/add", url.Values{"zone": {"export.test"}, "domain": {"_dns.export.test"}, "type": {"SVCB"}, "svcPriority": {"1"}, "svcTargetName": {"dns.export.test"}, "svcParams": {"alpn|h2"}}},
+		{"/api/zones/dnssec/sign", url.Values{"zone": {"export.test"}, "algorithm": {"ECDSA"}, "curve": {"P256"}}},
 		{"/api/zones/create", url.Values{"zone": {"fwd.export.test"}, "type": {"Forwarder"}, "initializeForwarder": {"false"}}},
 		{"/api/zones/records/add", url.Values{"zone": {"fwd.export.test"}, "domain": {"fwd.export.test"}, "type": {"FWD"}, "protocol": {"Udp"}, "forwarder": {"192.0.2.53"}}},
 		{"/api/dhcp/scopes/set", url.Values{"name": {"export"}, "startingAddress": {"192.168.70.10"}, "endingAddress": {"192.168.70.200"}, "subnetMask": {"255.255.255.0"}, "exclusions": {"192.168.70.10|192.168.70.20"}}},
@@ -46,6 +58,8 @@ func TestAccExport(t *testing.T) {
 		{"/api/blocked/add", url.Values{"domain": {"ads.export.test"}}},
 		{"/api/allowed/add", url.Values{"domain": {"cdn.export.test"}}},
 		{"/api/settings/set", url.Values{"tsigKeys": {"export-key|c2VjcmV0LWtleQ==|hmac-sha256"}}},
+		{"/api/admin/ldap/set", url.Values{"ldapServer": {"ldap.example.com"}, "ldapBindUsername": {"CN=svc,DC=example,DC=com"}, "ldapBindPassword": {"s3cret"}, "ldapGroupMap": {"CN=dns,DC=example,DC=com|DNS Administrators"}}},
+		{"/api/admin/sso/set", url.Values{"ssoClientId": {"technitium"}, "ssoClientSecret": {"s3cret"}, "ssoAuthority": {"https://idp.example.com/realms/home"}, "ssoGroupMap": {"dns-admins|DNS Administrators"}}},
 	} {
 		call(t, c, step.path, step.params)
 	}
@@ -72,9 +86,13 @@ func TestAccExport(t *testing.T) {
 		`prevent_destroy = true`,
 		`data "technitium_group" "administrators"`,
 		`user_permissions = []`,
+		`resource "technitium_settings_sso" "this"`,
+		`resource "technitium_zone_permissions" "export_test"`,
+		`resource "technitium_zone_dnssec" "export_test"`,
+		"# Administrators and DNS Administrators always have full rights here: the server adds them, so they are not listed.\nresource \"technitium_permissions_zones\" \"this\"",
+		"# Administrators always has full rights here: the server adds it, so it is not listed.\nresource \"technitium_permissions_logs\" \"this\"",
 		`data "technitium_group" "everyone"`,
 		`group   = data.technitium_group.administrators.name`,
-		`name       = data.technitium_group.administrators.name`,
 		`resource "technitium_permissions_zones" "this"`,
 		`resource "technitium_blocked_zone" "ads_export_test"`,
 		`resource "technitium_allowed_zone" "cdn_export_test"`,
@@ -84,14 +102,25 @@ func TestAccExport(t *testing.T) {
 		require.Contains(t, generated, want)
 	}
 	require.NotContains(t, generated, `resource "technitium_group" "administrators"`, "built-in groups are not exported")
+	require.NotRegexp(t, `name\s+= data\.technitium_group\.administrators\.name`, generated, "kept groups are left out of permissions")
 	for _, want := range []string{
 		`zone\s+= technitium_zone\.export_test\.zone`,
 		`scope\s+= technitium_dhcp_scope\.export\.name`,
 		`members\s+= \[technitium_user\.exporter\.username\]`,
 		`group\s+= technitium_group\.exporters\.name`,
 		`id = "export\.test/www\.export\.test/10\.0\.0\.1"`,
+		`local_group\s+= data\.technitium_group\.dns_administrators\.name`,
+		`client_secret\s+= var\.settings_sso_this_client_secret`,
+		`bind_password\s+= var\.settings_ldap_this_bind_password`,
+		`id = jsonencode\(\{`,
 	} {
 		require.Regexp(t, want, generated)
+	}
+	if app != "" {
+		require.Contains(t, generated, `resource "technitium_app" "split_horizon"`)
+		require.Contains(t, generated, `url  = "`+app+`"`)
+		require.Regexp(t, `name\s+= technitium_app\.split_horizon\.name`, generated)
+		require.Contains(t, generated, "config = jsonencode({", "app config as HCL")
 	}
 	_, err := os.Stat(filepath.Join(out, "records_export_test.tf"))
 	require.NoError(t, err, "records are written per zone")
@@ -108,6 +137,8 @@ func TestAccExport(t *testing.T) {
 		"user_admin_password":                          config.StringVariable(testserver.Password),
 		"user_exporter_password":                       config.StringVariable("exporter-pass"),
 		"settings_tsig_this_tsig_keys_0_shared_secret": config.StringVariable("c2VjcmV0LWtleQ=="),
+		"settings_sso_this_client_secret":              config.StringVariable("s3cret"),
+		"settings_ldap_this_bind_password":             config.StringVariable("s3cret"),
 	}
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
@@ -181,7 +212,8 @@ func withoutResources(t *testing.T, cfg string, addrs []string) string {
 }
 
 // onlyImports fails a plan that would change anything but adopt objects. The
-// one exception is user passwords, which the server never returns.
+// exceptions set values the server never returns: user passwords, the SSO
+// client secret, the LDAP bind password and the URL an app is installed from.
 type onlyImports struct{}
 
 func (onlyImports) CheckPlan(_ context.Context, req plancheck.CheckPlanRequest, resp *plancheck.CheckPlanResponse) {
@@ -192,7 +224,7 @@ func (onlyImports) CheckPlan(_ context.Context, req plancheck.CheckPlanRequest, 
 		}
 		switch {
 		case rc.Change.Actions.NoOp():
-		case rc.Change.Actions.Update() && rc.Type == "technitium_user":
+		case rc.Change.Actions.Update() && (rc.Type == "technitium_user" || rc.Type == "technitium_settings_sso" || rc.Type == "technitium_settings_ldap" || rc.Type == "technitium_app"):
 		default:
 			resp.Error = fmt.Errorf("%s: unexpected %v", rc.Address, rc.Change.Actions)
 			return

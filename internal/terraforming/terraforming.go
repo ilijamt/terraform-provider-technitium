@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
@@ -50,6 +51,8 @@ type Options struct {
 var files = []struct{ name, prefix string }{
 	{"zones.tf", "zone"},
 	{"zones.tf", "record_soa"},
+	{"zones.tf", "zone_permissions"},
+	{"zones.tf", "zone_dnssec"},
 	{"settings.tf", "settings_"},
 	{"dhcp.tf", "dhcp_"},
 	{"blocking.tf", "allowed_zone"},
@@ -58,6 +61,8 @@ var files = []struct{ name, prefix string }{
 	{"access.tf", "group"},
 	{"access.tf", "group_members"},
 	{"access.tf", "permissions_"},
+	{"apps.tf", "app"},
+	{"apps.tf", "app_config"},
 }
 
 func fileFor(obj object) string {
@@ -156,6 +161,11 @@ func Run(ctx context.Context, o Options) error {
 		case state == nil:
 			warn("skipping technitium_%s %s: gone", obj.Type, obj.ID)
 		default:
+			for k, v := range obj.Fill {
+				if s, ok := state[k]; ok && s.IsNull() {
+					state[k] = tftypes.NewValue(tftypes.String, v)
+				}
+			}
 			states[obj.Type+"."+obj.name] = state
 			kept = append(kept, obj)
 		}
@@ -186,7 +196,15 @@ func Run(ctx context.Context, o Options) error {
 			dataBlock(body(fileFor(obj)), obj.Type, obj.name, obj.Identity)
 			continue
 		}
-		vars = append(vars, resourceBlock(body(fileFor(obj)), obj.Type, obj.name, r.schemas["technitium_"+obj.Type], states[obj.Type+"."+obj.name], refs(obj.Type))...)
+		spec := specs[obj.Type]
+		b := body(fileFor(obj))
+		if note := keptNote(spec); note != "" {
+			b.AppendUnstructuredTokens(hclwrite.Tokens{{Type: hclsyntax.TokenComment, Bytes: []byte(note)}})
+		}
+		isJSON := func(attr string) bool {
+			return slices.ContainsFunc(spec.Attrs, func(a framework.Attr) bool { return a.Name == attr && a.JSON })
+		}
+		vars = append(vars, resourceBlock(b, obj.Type, obj.name, r.schemas["technitium_"+obj.Type], states[obj.Type+"."+obj.name], refs(obj.Type), isJSON)...)
 		importBlock(body("imports.tf"), obj.Type, obj.name, obj.ID)
 	}
 	for _, v := range vars {
@@ -196,6 +214,26 @@ func Run(ctx context.Context, o Options) error {
 		return errors.New("nothing to export")
 	}
 	return write(o.Out, out, o.Force, o.Log)
+}
+
+// keptNote is a comment naming the groups a permissions resource leaves out,
+// as the server always gives them full rights, or "" for other resources.
+func keptNote(spec framework.Spec) string {
+	for _, a := range spec.Attrs {
+		switch len(a.Kept) {
+		case 0:
+		case 1:
+			return fmt.Sprintf("# %s always has full rights here: the server adds it, so it is not listed.\n", a.Kept[0])
+		default:
+			return fmt.Sprintf("# %s always have full rights here: the server adds them, so they are not listed.\n", strings.Join(a.Kept, " and "))
+		}
+	}
+	return ""
+}
+
+// permissions reports whether a resource type holds permission lists.
+func permissions(typ string) bool {
+	return strings.HasPrefix(typ, "permissions_") || typ == "zone_permissions"
 }
 
 // references returns, for a resource type, the references to use instead of
@@ -218,6 +256,8 @@ func references(objects []object) func(typ string) ref {
 			index[key{"group", obj.ID}] = traversal("technitium_group", obj.name, "name")
 		case obj.Type == "zone":
 			index[key{"zone", strings.ToLower(obj.ID)}] = traversal("technitium_zone", obj.name, "zone")
+		case obj.Type == "app":
+			index[key{"app", obj.ID}] = traversal("technitium_app", obj.name, "name")
 		case obj.Type == "dhcp_scope":
 			index[key{"scope", obj.ID}] = traversal("technitium_dhcp_scope", obj.name, "name")
 		case obj.Data && obj.Type == "user":
@@ -230,18 +270,23 @@ func references(objects []object) func(typ string) ref {
 		return func(path []string, s string) (hclwrite.Tokens, bool) {
 			var kind string
 			switch {
-			case strings.HasPrefix(typ, "record_") && slices.Equal(path, []string{"zone"}):
+			case (strings.HasPrefix(typ, "record_") || typ == "zone_permissions" || typ == "zone_dnssec") && slices.Equal(path, []string{"zone"}):
 				kind, s = "zone", strings.ToLower(s)
+			case typ == "app_config" && slices.Equal(path, []string{"name"}),
+				typ == "record_app" && slices.Equal(path, []string{"app_name"}):
+				kind = "app"
 			case typ == "dhcp_reserved_lease" && slices.Equal(path, []string{"scope"}):
 				kind = "scope"
 			case typ == "group_members" && slices.Equal(path, []string{"group"}):
 				kind = "group"
 			case typ == "group_members" && len(path) == 2 && path[0] == "members":
 				kind = "user"
-			case strings.HasPrefix(typ, "permissions_") && len(path) == 3 && path[0] == "group_permissions" && path[2] == "name":
+			case permissions(typ) && len(path) == 3 && path[0] == "group_permissions" && path[2] == "name":
 				kind = "group"
-			case strings.HasPrefix(typ, "permissions_") && len(path) == 3 && path[0] == "user_permissions" && path[2] == "username":
+			case permissions(typ) && len(path) == 3 && path[0] == "user_permissions" && path[2] == "username":
 				kind = "user"
+			case (typ == "settings_sso" || typ == "settings_ldap") && len(path) == 3 && path[0] == "group_map" && path[2] == "local_group":
+				kind = "group"
 			default:
 				return nil, false
 			}

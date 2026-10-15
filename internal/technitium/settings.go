@@ -294,6 +294,82 @@ var settings = []framework.Spec{
 	),
 }
 
+// settingsSSO is the single sign-on configuration. It has its own calls,
+// which may restart the web service to apply a change.
+var settingsSSO = framework.Spec{
+	Name: "settings_sso",
+	Description: "Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. " +
+		"The server restarts its web service when a change needs it. Destroying the resource leaves the configuration as it is.",
+	Read:   "/api/admin/sso/get",
+	Update: "/api/admin/sso/set",
+	Attrs: []framework.Attr{
+		{Name: "enabled", Param: "ssoEnabled", Type: framework.Bool, Key: "ssoEnabled", Update: true,
+			Description: "Allow signing in with single sign-on."},
+		{Name: "authority", Param: "ssoAuthority", Type: framework.String, Key: "ssoAuthority", Update: true,
+			Description: "The OpenID Connect authority URL of the provider."},
+		{Name: "client_id", Param: "ssoClientId", Type: framework.String, Key: "ssoClientId", Update: true,
+			Description: "The OpenID Connect client ID."},
+		{Name: "client_secret", Param: "ssoClientSecret", Type: framework.String, Sensitive: true, Update: true,
+			Description: "The OpenID Connect client secret. The server never returns it, so a secret changed outside Terraform is not detected."},
+		{Name: "metadata_address", Param: "ssoMetadataAddress", Type: framework.String, Key: "ssoMetadataAddress", Update: true,
+			Description: "The OpenID Connect discovery URL, when the provider does not use the default one."},
+		{Name: "scopes", Param: "ssoScopes", Type: framework.List, Key: "ssoScopes", Update: true, Separator: "|",
+			Description: "The OpenID Connect scopes to request. Technitium's default is `openid`, `profile` and `email`."},
+		{Name: "allow_signup", Param: "ssoAllowSignup", Type: framework.Bool, Key: "ssoAllowSignup", Update: true,
+			Description: "Create an account for a new user the first time they sign in with single sign-on."},
+		{Name: "allow_signup_only_for_mapped_users", Param: "ssoAllowSignupOnlyForMappedUsers", Type: framework.Bool, Key: "ssoAllowSignupOnlyForMappedUsers", Update: true,
+			Description: "Let a new user sign up only when they are in at least one provider group in `group_map`."},
+		{Name: "group_map", Param: "ssoGroupMap", Type: framework.Table, Key: "ssoGroupMap", Update: true,
+			Columns: []framework.Column{
+				{Name: "remote_group", Key: "remoteGroup", Type: framework.String, Description: "The group at the SSO provider."},
+				{Name: "local_group", Key: "localGroup", Type: framework.String, Description: "The local group its members join."},
+			},
+			Description: "Maps the provider's groups to local groups. An SSO user's local groups are synced from it each time they sign in. An empty set removes the map."},
+	},
+}
+
+// settingsLDAP is the LDAP authentication configuration. Its calls are in
+// the server but not in its API docs.
+var settingsLDAP = framework.Spec{
+	Name: "settings_ldap",
+	Description: "Manages LDAP authentication: users from an LDAP directory, such as Active Directory or OpenLDAP, signing in with their directory credentials, " +
+		"and how directory groups map to local groups. Destroying the resource leaves the configuration as it is.",
+	Read:   "/api/admin/ldap/get",
+	Update: "/api/admin/ldap/set",
+	Attrs: []framework.Attr{
+		{Name: "enabled", Param: "ldapEnabled", Type: framework.Bool, Key: "ldapEnabled", Update: true,
+			Description: "Allow signing in with LDAP."},
+		{Name: "server", Param: "ldapServer", Type: framework.String, Key: "ldapServer", Update: true,
+			Description: "The domain name or IP address of the LDAP server."},
+		{Name: "port", Param: "ldapPort", Type: framework.Int64, Key: "ldapPort", Update: true,
+			Description: "The LDAP port. Usually `389` for plain LDAP and StartTLS, `636` for LDAPS. Technitium's default is `389`."},
+		{Name: "ssl_option", Param: "ldapSslOption", Type: framework.String, Key: "ldapSslOption", Update: true, Enum: []string{"None", "StartTLS", "LDAPS"},
+			Description: "How the connection is secured: `None`, `StartTLS` or `LDAPS`."},
+		{Name: "ignore_ssl_errors", Param: "ldapIgnoreSslErrors", Type: framework.Bool, Key: "ldapIgnoreSslErrors", Update: true,
+			Description: "Accept the server's TLS certificate even when it does not validate."},
+		{Name: "bind_username", Param: "ldapBindUsername", Type: framework.String, Key: "ldapBindUsername", Update: true,
+			Description: "The distinguished name or user principal name of the service account that searches the directory. Leave it out to bind anonymously."},
+		{Name: "bind_password", Param: "ldapBindPassword", Type: framework.String, Sensitive: true, Update: true,
+			Description: "The service account's password. The server never returns it, so a password changed outside Terraform is not detected."},
+		{Name: "search_base", Param: "ldapSearchBase", Type: framework.String, Key: "ldapSearchBase", Update: true,
+			Description: "The distinguished name to search for users under, for example `DC=example,DC=com`."},
+		{Name: "user_search_filter", Param: "ldapUserSearchFilter", Type: framework.String, Key: "ldapUserSearchFilter", Update: true,
+			Description: "The filter that finds a user, with `{0}` for the username: `(sAMAccountName={0})` for Active Directory, `(uid={0})` for OpenLDAP."},
+		{Name: "group_attribute", Param: "ldapGroupAttribute", Type: framework.String, Key: "ldapGroupAttribute", Update: true,
+			Description: "The user attribute that lists their groups, for example `memberOf`."},
+		{Name: "group_map", Param: "ldapGroupMap", Type: framework.Table, Key: "ldapGroupMap", Update: true,
+			Columns: []framework.Column{
+				{Name: "remote_group", Key: "remoteGroup", Type: framework.String, Description: "The directory group, as `group_attribute` lists it."},
+				{Name: "local_group", Key: "localGroup", Type: framework.String, Description: "The local group its members join."},
+			},
+			Description: "Maps directory groups to local groups. An LDAP user's local groups are synced from it each time they sign in. An empty set removes the map."},
+		{Name: "allow_signup", Param: "ldapAllowSignup", Type: framework.Bool, Key: "ldapAllowSignup", Update: true,
+			Description: "Create an account for a directory user the first time they sign in."},
+		{Name: "allow_signup_only_for_mapped_users", Param: "ldapAllowSignupOnlyForMappedUsers", Type: framework.Bool, Key: "ldapAllowSignupOnlyForMappedUsers", Update: true,
+			Description: "Let a new user sign up only when they are in at least one directory group in `group_map`."},
+	},
+}
+
 // qpmPrefixLimitColumns are the rows of the per subnet query rate limits.
 var qpmPrefixLimitColumns = []framework.Column{
 	{Name: "prefix", Key: "prefix", Type: framework.Int64,

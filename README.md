@@ -24,19 +24,27 @@ resource "technitium_record_a" "nas" {
 
 Resources:
 
-- `technitium_zone`, and `technitium_record_soa` for the `SOA` record every zone has
+- `technitium_zone`, and `technitium_record_soa` for the `SOA` record every zone has, and
+  `technitium_zone_dnssec` to sign a zone with DNSSEC
 - one `technitium_record_<type>` per record type: A, AAAA, NS, CNAME, PTR, MX,
   TXT, RP, SRV, NAPTR, DNAME, DS, SSHFP, TLSA, SVCB, HTTPS, URI, CAA, ANAME, FWD
   and APP
 - `technitium_dhcp_scope`, and `technitium_dhcp_reserved_lease` for each reserved address
 - `technitium_allowed_zone` and `technitium_blocked_zone` for domains to allow or block
+- `technitium_app` to install DNS apps and `technitium_app_config` for their config, with
+  `data "technitium_store_app"` for an app's download URL in the DNS App Store
+- `technitium_api_token` to issue API tokens for other tools
 - `technitium_user`, `technitium_group`, `technitium_group_members`, and one
   `technitium_permissions_<section>` per section of the server (dashboard,
   zones, cache, allowed, blocked, apps, dns_client, settings, dhcp_server,
-  administration, logs) for access to the web console and API
+  administration, logs) and `technitium_zone_permissions` per zone, for access
+  to the web console and API
 - one `technitium_settings_<area>` per tab of the Settings page: general,
   web_service, optional_protocols, tsig, recursion, cache, blocking,
   proxy_forwarders and logging. Each manages only its own settings.
+- `technitium_settings_sso` for single sign-on: the OpenID Connect provider,
+  sign-up rules and the group map, and `technitium_settings_ldap` for LDAP
+  authentication
 
 Data sources read what a resource manages without managing it, found by the
 same identity: zones and their `SOA`, settings, DHCP scopes and reserved
@@ -51,7 +59,7 @@ Exporting a server
 `tf-technitium` writes Terraform configuration for everything on a server, like
 [cf-terraforming](https://github.com/cloudflare/cf-terraforming) does for
 Cloudflare: a file of resources per group (`zones.tf` with each zone and its
-`SOA`, `settings.tf`, `dhcp.tf`, `blocking.tf`, `access.tf`), a
+`SOA`, `settings.tf`, `dhcp.tf`, `blocking.tf`, `access.tf`, `apps.tf`), a
 `records_<zone>.tf` per zone, `imports.tf` with an `import` block for each, and
 `variables.tf` for the secrets it does not write out. Resources refer to each
 other (`zone = technitium_zone.home_example_com.zone`) instead of repeating
@@ -97,6 +105,8 @@ new release:
 
 1. Diff `APIDOCS.md` between the two tags, for example
    `https://github.com/TechnitiumSoftware/DnsServer/compare/v15.6.1...<new>`.
+   `APIDOCS.md` misses some calls (LDAP is only in the code), so also compare
+   the routes the server registers in `DnsServerCore/DnsWebService.cs`.
 2. Update the specs for the parameters that changed.
 3. Bump `Version`, then run `make generate` and `make testacc`.
 

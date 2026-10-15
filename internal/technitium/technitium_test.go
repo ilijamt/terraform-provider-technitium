@@ -71,7 +71,7 @@ func TestSchemas(t *testing.T) {
 	for _, d := range resp.Diagnostics {
 		t.Errorf("%s: %s", d.Summary, d.Detail)
 	}
-	assert.Len(t, resp.ResourceSchemas, len(technitium.Specs()))
+	assert.Len(t, resp.ResourceSchemas, len(technitium.Resources()))
 	assert.Len(t, resp.DataSourceSchemas, len(technitium.DataSources()))
 	for _, name := range []string{"technitium_group", "technitium_permissions_zones", "technitium_settings_general", "technitium_zone"} {
 		assert.Contains(t, resp.DataSourceSchemas, name)
@@ -1017,8 +1017,6 @@ resource "technitium_permissions_zones" "this" {
     { username = technitium_user.alice.username, can_view = true, can_modify = false, can_delete = false },
   ]
   group_permissions = [
-    { name = "Administrators", can_view = true, can_modify = true, can_delete = true },
-    { name = "DNS Administrators", can_view = true, can_modify = true, can_delete = true },
     { name = technitium_group.ops.name, can_view = true, can_modify = true, can_delete = false },
   ]
 }
@@ -1048,7 +1046,7 @@ resource "technitium_permissions_zones" "this" {
 				Config: config("alice", "first-secret"),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("technitium_group_members.ops", "members.0", "alice"),
-					resource.TestCheckResourceAttr("technitium_permissions_zones.this", "group_permissions.#", "3"),
+					resource.TestCheckResourceAttr("technitium_permissions_zones.this", "group_permissions.#", "1"),
 					resource.TestCheckResourceAttr("technitium_user.alice", "session_timeout_seconds", "1800"),
 				),
 			},
@@ -1149,15 +1147,13 @@ resource "technitium_group" "ops" {
   name = "DataOps"
 }
 
-# The built-in groups the server keeps come from the data source, so only
-# the group Terraform adds is listed.
-data "technitium_permissions_zones" "this" {}
-
+# The built-in groups the server keeps need not be listed.
 resource "technitium_permissions_zones" "this" {
-  group_permissions = setunion(
-    [for p in data.technitium_permissions_zones.this.group_permissions : p if contains(["Administrators", "DNS Administrators"], p.name)],
-    [{ name = technitium_group.ops.name, can_view = true, can_modify = false, can_delete = false }],
-  )
+  group_permissions = [{ name = technitium_group.ops.name, can_view = true, can_modify = false, can_delete = false }]
+}
+
+data "technitium_permissions_zones" "this" {
+  depends_on = [technitium_permissions_zones.this]
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -1165,10 +1161,12 @@ resource "technitium_permissions_zones" "this" {
 					resource.TestCheckResourceAttr("data.technitium_group.admins", "description", "Super administrators"),
 					resource.TestCheckResourceAttr("data.technitium_user.admin", "display_name", "Administrator"),
 					resource.TestCheckNoResourceAttr("data.technitium_user.admin", "password"),
+					resource.TestCheckResourceAttr("data.technitium_user.admin", "is_sso_user", "false"),
 					resource.TestCheckResourceAttrSet("data.technitium_settings_general.this", "dns_server_domain"),
 					resource.TestCheckResourceAttr("data.technitium_dhcp_scope.test", "starting_address", "192.168.80.10"),
-					resource.TestCheckTypeSetElemNestedAttrs("data.technitium_permissions_zones.this", "group_permissions.*", map[string]string{"name": "Administrators", "can_delete": "true"}),
-					resource.TestCheckResourceAttr("technitium_permissions_zones.this", "group_permissions.#", "3"),
+					resource.TestCheckTypeSetElemNestedAttrs("data.technitium_permissions_zones.this", "group_permissions.*", map[string]string{"name": "DataOps"}),
+					resource.TestCheckResourceAttr("data.technitium_permissions_zones.this", "group_permissions.#", "1"),
+					resource.TestCheckResourceAttr("technitium_permissions_zones.this", "group_permissions.#", "1"),
 				),
 			},
 		},
@@ -1213,6 +1211,552 @@ resource "technitium_record_https" "self" {
 				ImportState:       true,
 				ImportStateId:     `{"zone": "self.test", "domain": "self.test", "svc_priority": 1, "svc_target_name": ".", "svc_params": {}}`,
 				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+// resetSSO puts the SSO configuration back, so other tests and exports see
+// none.
+func resetSSO(t *testing.T) {
+	t.Cleanup(func() {
+		c, err := login()
+		if err == nil {
+			_, _ = c.Call(context.Background(), "/api/admin/sso/set", url.Values{
+				"ssoEnabled": {"false"}, "ssoAuthority": {""}, "ssoClientId": {""}, "ssoClientSecret": {""},
+				"ssoAllowSignup": {"false"}, "ssoGroupMap": {""},
+			})
+			// The change restarts the web service a moment later; let it
+			// finish before the next test calls the server.
+			time.Sleep(2 * time.Second)
+			_, _ = login()
+		}
+	})
+}
+
+// SSO stays disabled: enabling it would make the server restart its web
+// service against a provider that does not exist.
+func TestAccSettingsSSO(t *testing.T) {
+	acceptance(t)
+	resetSSO(t)
+	config := func(remote string) string {
+		return `
+data "technitium_group" "dns_admins" {
+  name = "DNS Administrators"
+}
+
+resource "technitium_settings_sso" "this" {
+  enabled       = false
+  authority     = "https://idp.example.com/realms/home"
+  client_id     = "technitium"
+  client_secret = "s3cret"
+  allow_signup  = true
+  group_map = [
+    { remote_group = "` + remote + `", local_group = data.technitium_group.dns_admins.name },
+  ]
+}
+
+data "technitium_settings_sso" "this" {
+  depends_on = [technitium_settings_sso.this]
+}
+`
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config("dns-admins"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_settings_sso.this", "client_id", "technitium"),
+					resource.TestCheckResourceAttr("technitium_settings_sso.this", "scopes.#", "3"),
+					resource.TestCheckResourceAttr("data.technitium_settings_sso.this", "authority", "https://idp.example.com/realms/home"),
+					resource.TestCheckNoResourceAttr("data.technitium_settings_sso.this", "client_secret"),
+					resource.TestCheckTypeSetElemNestedAttrs("data.technitium_settings_sso.this", "group_map.*", map[string]string{"remote_group": "dns-admins", "local_group": "DNS Administrators"}),
+				),
+			},
+			{
+				Config: config("dns-operators"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_settings_sso.this", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckTypeSetElemNestedAttrs("technitium_settings_sso.this", "group_map.*", map[string]string{"remote_group": "dns-operators"}),
+			},
+			{
+				ResourceName:            "technitium_settings_sso.this",
+				ImportState:             true,
+				ImportStateId:           "settings_sso",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"client_secret"},
+			},
+		},
+	})
+}
+
+func TestAccKeptGroupNeedsFullRights(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: `
+resource "technitium_permissions_dashboard" "this" {
+  group_permissions = [{ name = "Administrators", can_view = true, can_modify = false, can_delete = false }]
+}
+`,
+			ExpectError: regexp.MustCompile(`always has full rights`),
+		}},
+	})
+}
+
+func TestAccZonePermissions(t *testing.T) {
+	config := `
+resource "technitium_zone" "test" {
+  zone = "perm.test"
+}
+
+resource "technitium_user" "bob" {
+  username = "bob"
+  password = "bob-secret"
+}
+
+resource "technitium_group" "ops" {
+  name = "ZoneOps"
+}
+
+resource "technitium_zone_permissions" "test" {
+  zone = technitium_zone.test.zone
+  user_permissions = [
+    { username = technitium_user.bob.username, can_view = true, can_modify = true, can_delete = false },
+  ]
+  group_permissions = [
+    { name = technitium_group.ops.name, can_view = true, can_modify = false, can_delete = false },
+  ]
+}
+
+data "technitium_zone_permissions" "test" {
+  zone       = technitium_zone_permissions.test.zone
+  depends_on = [technitium_zone_permissions.test]
+}
+`
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             zonesDestroyed("perm.test"),
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_zone_permissions.test", "group_permissions.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("data.technitium_zone_permissions.test", "user_permissions.*", map[string]string{"username": "bob", "can_modify": "true"}),
+				),
+			},
+			{
+				// A change made behind Terraform's back shows up as drift.
+				PreConfig: func() {
+					call(t, api(t), "/api/zones/permissions/set", url.Values{"zone": {"perm.test"}, "userPermissions": {""}})
+				},
+				Config: config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_zone_permissions.test", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_zone_permissions.test", "user_permissions.#", "1"),
+			},
+			{
+				ResourceName:      "technitium_zone_permissions.test",
+				ImportState:       true,
+				ImportStateId:     "perm.test",
+				ImportStateVerify: true,
+			},
+			{
+				// Listing the groups the server keeps, with full rights, works
+				// too: they are kept in state and the plan settles.
+				Config: strings.Replace(config, `group_permissions = [`, `group_permissions = [
+    { name = "Administrators", can_view = true, can_modify = true, can_delete = true },
+    { name = "DNS Administrators", can_view = true, can_modify = true, can_delete = true },`, 1),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_zone_permissions.test", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_zone_permissions.test", "group_permissions.#", "3"),
+			},
+			{
+				// And taking them out again settles too.
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("technitium_zone_permissions.test", "group_permissions.#", "1"),
+			},
+		},
+	})
+}
+
+// storeURL returns the DNS App Store download URL of an app, skipping the
+// test when the store cannot be reached.
+func storeURL(t *testing.T, name string) string {
+	resp, err := api(t).Call(context.Background(), "/api/apps/listStoreApps", nil)
+	if err != nil {
+		t.Skipf("DNS App Store unreachable: %s", err)
+	}
+	return appURL(t, resp, name)
+}
+
+// tryStoreURL is storeURL that returns "" when the store cannot be reached.
+func tryStoreURL(t *testing.T, name string) string {
+	resp, err := api(t).Call(context.Background(), "/api/apps/listStoreApps", nil)
+	if err != nil {
+		return ""
+	}
+	return appURL(t, resp, name)
+}
+
+func appURL(t *testing.T, resp map[string]any, name string) string {
+	for _, a := range resp["storeApps"].([]any) {
+		if app := a.(map[string]any); app["name"] == name {
+			u, _ := app["url"].(string)
+			return u
+		}
+	}
+	t.Fatalf("%s is not in the DNS App Store", name)
+	return ""
+}
+
+func TestAccApps(t *testing.T) {
+	acceptance(t)
+	storeURL(t, "Split Horizon") // skips the test without the DNS App Store
+	config := func(lan string) string {
+		return fmt.Sprintf(`
+data "technitium_store_app" "split_horizon" {
+  name = "Split Horizon"
+}
+
+resource "technitium_app" "split_horizon" {
+  name = data.technitium_store_app.split_horizon.name
+  url  = data.technitium_store_app.split_horizon.url
+}
+
+resource "technitium_app_config" "split_horizon" {
+  name   = technitium_app.split_horizon.name
+  config = jsonencode({ networks = { lan = ["%s"] } })
+}
+
+resource "technitium_zone" "test" {
+  zone = "apps.test"
+}
+
+resource "technitium_record_app" "www" {
+  zone        = technitium_zone.test.zone
+  domain      = "www.apps.test"
+  app_name    = technitium_app.split_horizon.name
+  class_path  = "SplitHorizon.SimpleAddress"
+  record_data = jsonencode({ lan = ["10.0.0.1"] })
+}
+`, lan)
+	}
+	installed := func() (bool, error) {
+		c, err := login()
+		if err != nil {
+			return false, err
+		}
+		resp, err := c.Call(context.Background(), "/api/apps/list", nil)
+		if err != nil {
+			return false, err
+		}
+		for _, a := range resp["apps"].([]any) {
+			if a.(map[string]any)["name"] == "Split Horizon" {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy: func(*terraform.State) error {
+			if ok, err := installed(); err != nil || ok {
+				return fmt.Errorf("app still installed (%v)", err)
+			}
+			return zonesDestroyed("apps.test")(nil)
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config("192.168.0.0/16"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrSet("technitium_app.split_horizon", "version"),
+					resource.TestCheckResourceAttrPair("technitium_app.split_horizon", "version", "data.technitium_store_app.split_horizon", "version"),
+					resource.TestCheckResourceAttr("technitium_app_config.split_horizon", "config", `{"networks":{"lan":["192.168.0.0/16"]}}`),
+				),
+			},
+			{
+				Config: config("10.0.0.0/8"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("technitium_app_config.split_horizon", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("technitium_app.split_horizon", plancheck.ResourceActionNoop),
+					},
+				},
+			},
+			{
+				// The same JSON spelled differently on the server is no change.
+				PreConfig: func() {
+					call(t, api(t), "/api/apps/config/set", url.Values{"name": {"Split Horizon"}, "config": {"{\r\n  \"networks\": {\r\n    \"lan\": [ \"10.0.0.0/8\" ]\r\n  }\r\n}\r\n"}})
+				},
+				Config: config("10.0.0.0/8"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_app_config.split_horizon", plancheck.ResourceActionNoop)},
+				},
+			},
+			{
+				ResourceName:            "technitium_app.split_horizon",
+				ImportState:             true,
+				ImportStateId:           "Split Horizon",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"url"},
+			},
+			{
+				ResourceName:      "technitium_app_config.split_horizon",
+				ImportState:       true,
+				ImportStateId:     "Split Horizon",
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccDHCPScopeEnabled(t *testing.T) {
+	config := func(enabled bool) string {
+		return fmt.Sprintf(`
+resource "technitium_dhcp_scope" "toggle" {
+  name             = "toggle"
+  starting_address = "192.168.90.10"
+  ending_address   = "192.168.90.20"
+  subnet_mask      = "255.255.255.0"
+  enabled          = %t
+}
+
+data "technitium_dhcp_scope" "toggle" {
+  name       = technitium_dhcp_scope.toggle.name
+  depends_on = [technitium_dhcp_scope.toggle]
+}
+`, enabled)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				// A new scope starts enabled, so create disables it.
+				Config: config(false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_dhcp_scope.toggle", "enabled", "false"),
+					resource.TestCheckResourceAttr("data.technitium_dhcp_scope.toggle", "enabled", "false"),
+				),
+			},
+			{
+				Config: config(true),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_dhcp_scope.toggle", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_dhcp_scope.toggle", "enabled", "true"),
+			},
+			{
+				// A change made behind Terraform's back shows up as drift.
+				PreConfig: func() { call(t, api(t), "/api/dhcp/scopes/disable", url.Values{"name": {"toggle"}}) },
+				Config:    config(true),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_dhcp_scope.toggle", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr("technitium_dhcp_scope.toggle", "enabled", "true"),
+			},
+			{
+				ResourceName:      "technitium_dhcp_scope.toggle",
+				ImportState:       true,
+				ImportStateId:     "toggle",
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccAPIToken(t *testing.T) {
+	var token string
+	works := func(token string) error {
+		_, err := client.New(os.Getenv("TECHNITIUM_HOST"), token, "test", false, nil).Call(context.Background(), "/api/user/session/get", nil)
+		return err
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy: func(*terraform.State) error {
+			if works(token) == nil {
+				return fmt.Errorf("the token still works after destroy")
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "technitium_user" "ci" {
+  username = "ci"
+  password = "ci-secret"
+}
+
+resource "technitium_api_token" "ci" {
+  username   = technitium_user.ci.username
+  token_name = "deploy"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					func(s *terraform.State) error {
+						attrs := s.RootModule().Resources["technitium_api_token.ci"].Primary.Attributes
+						token = attrs["token"]
+						if len(token) < 16 || attrs["partial_token"] != token[:16] || attrs["id"] != token[:16] {
+							return fmt.Errorf("partial token %q does not start the token", attrs["partial_token"])
+						}
+						return works(token)
+					},
+				),
+			},
+			{
+				ResourceName:            "technitium_api_token.ci",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"token"},
+			},
+		},
+	})
+}
+
+func TestAccZoneDNSSEC(t *testing.T) {
+	config := func(nx string, rollover int) string {
+		return fmt.Sprintf(`
+resource "technitium_zone" "test" {
+  zone = "signed.test"
+}
+
+resource "technitium_zone_dnssec" "test" {
+  zone              = technitium_zone.test.zone
+  algorithm         = "ECDSA"
+  curve             = "P256"
+  nx_proof          = "%s"
+  zsk_rollover_days = %d
+}
+
+data "technitium_zone_dnssec" "test" {
+  zone       = technitium_zone_dnssec.test.zone
+  depends_on = [technitium_zone_dnssec.test]
+}
+`, nx, rollover)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             zonesDestroyed("signed.test"),
+		Steps: []resource.TestStep{
+			{
+				Config: config("NSEC3", 30),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_zone_dnssec.test", "status", "SignedWithNSEC3"),
+					resource.TestCheckResourceAttr("technitium_zone_dnssec.test", "nsec3_iterations", "0"),
+					resource.TestCheckResourceAttr("technitium_zone_dnssec.test", "keys.#", "2"),
+					resource.TestCheckResourceAttrSet("technitium_zone_dnssec.test", "ds_records.0.digest"),
+					resource.TestCheckResourceAttr("data.technitium_zone_dnssec.test", "signed", "true"),
+					resource.TestCheckResourceAttr("data.technitium_zone_dnssec.test", "curve", "P256"),
+				),
+			},
+			{
+				Config: config("NSEC", 60),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_zone_dnssec.test", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_zone_dnssec.test", "status", "SignedWithNSEC"),
+					resource.TestCheckResourceAttr("technitium_zone_dnssec.test", "zsk_rollover_days", "60"),
+					resource.TestCheckNoResourceAttr("technitium_zone_dnssec.test", "nsec3_iterations"),
+				),
+			},
+			{
+				ResourceName:      "technitium_zone_dnssec.test",
+				ImportState:       true,
+				ImportStateId:     "signed.test",
+				ImportStateVerify: true,
+			},
+			{
+				// Destroying the resource unsigns the zone, which stays.
+				Config: `
+resource "technitium_zone" "test" {
+  zone = "signed.test"
+}
+`,
+				Check: func(*terraform.State) error {
+					resp := call(t, api(t), "/api/zones/dnssec/properties/get", url.Values{"zone": {"signed.test"}})
+					if resp["dnssecStatus"] != "Unsigned" {
+						return fmt.Errorf("zone is %v after destroy", resp["dnssecStatus"])
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
+// resetLDAP puts the LDAP configuration back, so other tests and exports
+// see none.
+func resetLDAP(t *testing.T) {
+	t.Cleanup(func() {
+		if c, err := login(); err == nil {
+			_, _ = c.Call(context.Background(), "/api/admin/ldap/set", url.Values{
+				"ldapEnabled": {"false"}, "ldapServer": {""}, "ldapBindUsername": {""}, "ldapBindPassword": {""},
+				"ldapSearchBase": {""}, "ldapUserSearchFilter": {""}, "ldapGroupAttribute": {""}, "ldapGroupMap": {""}, "ldapAllowSignup": {"false"},
+			})
+		}
+	})
+}
+
+// LDAP stays disabled: there is no directory to sign in against.
+func TestAccSettingsLDAP(t *testing.T) {
+	acceptance(t)
+	resetLDAP(t)
+	config := func(group string) string {
+		return `
+data "technitium_group" "dns_admins" {
+  name = "DNS Administrators"
+}
+
+resource "technitium_settings_ldap" "this" {
+  enabled            = false
+  server             = "ldap.example.com"
+  port               = 636
+  ssl_option         = "LDAPS"
+  bind_username      = "CN=svc,DC=example,DC=com"
+  bind_password      = "s3cret"
+  search_base        = "DC=example,DC=com"
+  user_search_filter = "(sAMAccountName={0})"
+  group_attribute    = "memberOf"
+  group_map = [
+    { remote_group = "` + group + `", local_group = data.technitium_group.dns_admins.name },
+  ]
+}
+
+data "technitium_settings_ldap" "this" {
+  depends_on = [technitium_settings_ldap.this]
+}
+`
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: config("CN=dns,DC=example,DC=com"),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("technitium_settings_ldap.this", "port", "636"),
+					resource.TestCheckResourceAttr("data.technitium_settings_ldap.this", "ssl_option", "LDAPS"),
+					resource.TestCheckNoResourceAttr("data.technitium_settings_ldap.this", "bind_password"),
+					resource.TestCheckTypeSetElemNestedAttrs("data.technitium_settings_ldap.this", "group_map.*", map[string]string{"local_group": "DNS Administrators"}),
+				),
+			},
+			{
+				Config: config("CN=dns-ops,DC=example,DC=com"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_settings_ldap.this", plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckTypeSetElemNestedAttrs("technitium_settings_ldap.this", "group_map.*", map[string]string{"remote_group": "CN=dns-ops,DC=example,DC=com"}),
+			},
+			{
+				ResourceName:            "technitium_settings_ldap.this",
+				ImportState:             true,
+				ImportStateId:           "settings_ldap",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"bind_password"},
 			},
 		},
 	})

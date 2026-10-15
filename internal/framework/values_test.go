@@ -156,3 +156,21 @@ func TestEmptyValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, str("svc.example.com").Equal(got))
 }
+
+func TestListSeparator(t *testing.T) {
+	a := Attr{Name: "scopes", Type: List, Separator: "|"}
+	s, err := a.param(tftypes.NewValue(List.tf(), []tftypes.Value{str("openid"), str("email")}))
+	require.NoError(t, err)
+	assert.Equal(t, "openid|email", s)
+}
+
+func TestCanonicalJSON(t *testing.T) {
+	a := Attr{Name: "config", Type: String, JSON: true}
+	got, err := a.fromJSON("{\r\n  \"b\": [ 1, 2 ],\r\n  \"a\": \"x<y\"\r\n}\r\n")
+	require.NoError(t, err)
+	assert.True(t, str(`{"a":"x\u003cy","b":[1,2]}`).Equal(got), "as jsonencode writes it, got %s", got)
+
+	got, err = a.fromJSON("not json")
+	require.NoError(t, err)
+	assert.True(t, str("not json").Equal(got))
+}

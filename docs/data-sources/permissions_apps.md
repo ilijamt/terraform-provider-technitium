@@ -17,7 +17,7 @@ Reads what `technitium_permissions_apps` manages, without managing it.
 
 ### Read-Only
 
-- `group_permissions` (Attributes Set) The rights of groups, including the built-in admin groups the server keeps. Leaving it out keeps the server's. (see [below for nested schema](#nestedatt--group_permissions))
+- `group_permissions` (Attributes Set) The rights of groups. The server always keeps `Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Leaving it out keeps the server's. (see [below for nested schema](#nestedatt--group_permissions))
 - `id` (String) The identifier, as the resource has it.
 - `user_permissions` (Attributes Set) The rights of individual users. An empty set removes them; leaving it out keeps the server's. (see [below for nested schema](#nestedatt--user_permissions))
 

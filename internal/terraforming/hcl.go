@@ -1,6 +1,7 @@
 package terraforming
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"slices"
@@ -28,7 +29,7 @@ type ref func(path []string, s string) (hclwrite.Tokens, bool)
 // resourceBlock writes the configuration of one imported object. Sensitive
 // values become references to new variables, which it returns; strings
 // refs knows become references.
-func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Schema, state map[string]tftypes.Value, refs ref) []variable {
+func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Schema, state map[string]tftypes.Value, refs ref, isJSON func(attr string) bool) []variable {
 	b := body.AppendNewBlock("resource", []string{"technitium_" + typ, label}).Body()
 	var vars []variable
 	secret := func(name, what string) hclwrite.Tokens {
@@ -48,7 +49,7 @@ func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Sch
 		if a.Sensitive {
 			// The server does not return some secrets, so a required one
 			// gets a variable even without a value.
-			if a.Required || !empty(v) {
+			if a.Required || !empty(v) || needsSecret(typ, a.Name, state) {
 				b.SetAttributeRaw(a.Name, secret(typ+"_"+label+"_"+a.Name, "The "+a.Name))
 			}
 			continue
@@ -62,6 +63,15 @@ func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Sch
 		if a.NestedType != nil {
 			w.sensitive = func(path []string) bool { return nestedSensitive(a.NestedType, path) }
 		}
+		if isJSON != nil && isJSON(a.Name) {
+			var s string
+			if v.As(&s) == nil {
+				if t, ok := jsonencode(s); ok {
+					b.SetAttributeRaw(a.Name, t)
+					continue
+				}
+			}
+		}
 		b.SetAttributeRaw(a.Name, w.tokens(v, []string{a.Name}))
 	}
 	// The users existed before Terraform, and deleting one, such as admin,
@@ -73,10 +83,18 @@ func resourceBlock(body *hclwrite.Body, typ, label string, schema *tfprotov6.Sch
 	return vars
 }
 
+// needsSecret reports whether an optional secret the server does not return
+// is in use, so the configuration needs it: the SSO client secret once a
+// client is set up.
+func needsSecret(typ, attr string, state map[string]tftypes.Value) bool {
+	return typ == "settings_sso" && attr == "client_secret" && !empty(state["client_id"]) ||
+		typ == "settings_ldap" && attr == "bind_password" && !empty(state["bind_username"])
+}
+
 // owned reports whether an attribute is written even when empty, so that
 // Terraform owns the list: an entry added outside it shows as a change.
 func owned(typ, attr string) bool {
-	return strings.HasPrefix(typ, "permissions_") && (attr == "user_permissions" || attr == "group_permissions") ||
+	return permissions(typ) && (attr == "user_permissions" || attr == "group_permissions") ||
 		typ == "settings_tsig" && attr == "tsig_keys"
 }
 
@@ -190,7 +208,59 @@ func dataBlock(body *hclwrite.Body, typ, label string, identity map[string]strin
 func importBlock(body *hclwrite.Body, typ, label, id string) {
 	b := body.AppendNewBlock("import", nil).Body()
 	b.SetAttributeTraversal("to", hcl.Traversal{hcl.TraverseRoot{Name: "technitium_" + typ}, hcl.TraverseAttr{Name: label}})
+	if t, ok := jsonencode(id); ok {
+		b.SetAttributeRaw("id", t)
+		return
+	}
 	b.SetAttributeValue("id", cty.StringVal(id))
+}
+
+// jsonencode renders a JSON object or array as jsonencode(...) of the same
+// value in HCL, or reports false for anything else.
+func jsonencode(s string) (hclwrite.Tokens, bool) {
+	d := json.NewDecoder(strings.NewReader(s))
+	d.UseNumber()
+	var v any
+	if d.Decode(&v) != nil || d.More() {
+		return nil, false
+	}
+	switch v.(type) {
+	case map[string]any, []any:
+		return hclwrite.TokensForFunctionCall("jsonencode", jsonTokens(v)), true
+	}
+	return nil, false
+}
+
+// jsonTokens renders a decoded JSON value as HCL.
+func jsonTokens(v any) hclwrite.Tokens {
+	switch v := v.(type) {
+	case map[string]any:
+		var out []hclwrite.ObjectAttrTokens
+		for _, k := range sortedKeys(v) {
+			name := hclwrite.TokensForValue(cty.StringVal(k))
+			if hclsyntax.ValidIdentifier(k) {
+				name = hclwrite.TokensForIdentifier(k)
+			}
+			out = append(out, hclwrite.ObjectAttrTokens{Name: name, Value: jsonTokens(v[k])})
+		}
+		return hclwrite.TokensForObject(out)
+	case []any:
+		out := make([]hclwrite.Tokens, len(v))
+		for i, e := range v {
+			out[i] = jsonTokens(e)
+		}
+		return hclwrite.TokensForTuple(out)
+	case string:
+		return hclwrite.TokensForValue(cty.StringVal(v))
+	case json.Number:
+		if n, err := cty.ParseNumberVal(v.String()); err == nil {
+			return hclwrite.TokensForValue(n)
+		}
+		return hclwrite.TokensForValue(cty.StringVal(v.String()))
+	case bool:
+		return hclwrite.TokensForValue(cty.BoolVal(v))
+	}
+	return hclwrite.TokensForValue(cty.NullVal(cty.DynamicPseudoType))
 }
 
 func variableBlock(body *hclwrite.Body, v variable) {

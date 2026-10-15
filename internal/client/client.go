@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -26,6 +27,12 @@ type Error struct {
 
 func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s: %s", e.Path, e.Status, e.Message)
+}
+
+// IsDropped reports whether the connection was cut off before an answer, so
+// the call may or may not have taken effect.
+func IsDropped(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 // IsNotFound reports whether the API said the object does not exist.
@@ -70,7 +77,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 
 // Login exchanges a username and password for a session token.
 func (c *Client) Login(ctx context.Context, username, password string) error {
-	resp, err := c.call(ctx, "/api/user/login", url.Values{"user": {username}, "pass": {password}}, true)
+	resp, err := c.retry(ctx, "/api/user/login", url.Values{"user": {username}, "pass": {password}}, true)
 	if err != nil {
 		return err
 	}
@@ -86,20 +93,31 @@ func (c *Client) Login(ctx context.Context, username, password string) error {
 // changes the same data. Reading again shortly after succeeds.
 const busy = "Operation is not valid due to the current state of the object."
 
-// Call posts params to path and returns the "response" object. A read (get or
-// list) that fails because the server is busy is tried again; writes are not.
+// Call posts params to path and returns the "response" object. Calls that hit
+// a moment the server cannot serve are tried again: a read that finds it busy
+// with the same data, and any call that finds it restarting its web service,
+// as it does after some settings change. A call cut off mid-way is only tried
+// again when repeating it is harmless, which an add, create or install is not.
 func (c *Client) Call(ctx context.Context, path string, params url.Values) (map[string]any, error) {
+	return c.retry(ctx, path, params, false)
+}
+
+func (c *Client) retry(ctx context.Context, path string, params url.Values, root bool) (map[string]any, error) {
 	read := strings.HasSuffix(path, "/get") || strings.HasSuffix(path, "/list")
+	creates := strings.Contains(path, "/add") || strings.HasSuffix(path, "/create") || strings.HasSuffix(path, "Install") || strings.HasSuffix(path, "/install")
 	for attempt := 1; ; attempt++ {
-		resp, err := c.call(ctx, path, params, false)
+		resp, err := c.call(ctx, path, params, root)
 		var e *Error
-		if !read || attempt == 5 || !errors.As(err, &e) || e.Message != busy {
+		retry := read && errors.As(err, &e) && e.Message == busy ||
+			errors.Is(err, syscall.ECONNREFUSED) ||
+			!creates && IsDropped(err)
+		if !retry || attempt == 10 {
 			return resp, err
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
+		case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
 		}
 	}
 }
