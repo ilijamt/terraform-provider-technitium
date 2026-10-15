@@ -10,4 +10,10 @@ resource "technitium_app_config" "split_horizon" {
       lan = ["192.168.0.0/16"]
     }
   })
+
+  # Uninstalling or replacing the app makes the server delete its config.
+  # This sets it again in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_app.config_split_horizon]
+  }
 }

@@ -41,13 +41,13 @@ resource "technitium_record_naptr" "sip" {
 ### Optional
 
 - `comments` (String) Comments stored with the record.
-- `disable` (Boolean) Disable the record without deleting it. Defaults to `false`.
+- `disable` (Boolean) Disable the record without deleting it. A DNSSEC signed zone refuses disabled records, and a zone that holds one cannot be signed. Defaults to `false`.
 - `expiry_ttl` (Number) Deletes the record automatically this many seconds after it was last modified. Terraform then creates it again on the next apply. Defaults to `0`, which keeps the record.
 - `naptr_flags` (String) The flags that control how the other fields are interpreted, for example `U`, `S`, `A` or `P`.
 - `naptr_regexp` (String) The substitution expression applied to the string the client holds to build the next domain name or URI.
 - `naptr_replacement` (String) The next domain name to query, when `naptr_regexp` is not used.
 - `naptr_services` (String) The services available down this rewrite path, for example `E2U+sip`.
-- `ttl` (Number) The record TTL in seconds. Defaults to the default record TTL in the server settings.
+- `ttl` (Number) The record TTL in seconds. The records at one name and type share one TTL, so a value different from theirs is refused, and changing it on a record that has theirs changes it on all of them. Defaults to their TTL, or else to the default record TTL in the server settings.
 
 ### Read-Only
 

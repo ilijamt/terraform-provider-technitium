@@ -3,12 +3,12 @@
 page_title: "technitium_app_config Resource - technitium"
 subcategory: ""
 description: |-
-  Manages the config of an installed DNS app. The format is the app's own, usually JSON. Destroying the resource leaves the config as it is.
+  Manages the config of an installed DNS app. The format is the app's own, usually JSON. Destroying the resource leaves the config as it is. Uninstalling or replacing the app deletes its config: add replace_triggered_by on the technitium_app to set it again in the same apply.
 ---
 
 # technitium_app_config (Resource)
 
-Manages the config of an installed DNS app. The format is the app's own, usually JSON. Destroying the resource leaves the config as it is.
+Manages the config of an installed DNS app. The format is the app's own, usually JSON. Destroying the resource leaves the config as it is. Uninstalling or replacing the app deletes its config: add `replace_triggered_by` on the `technitium_app` to set it again in the same apply.
 
 ## Example Usage
 
@@ -25,6 +25,12 @@ resource "technitium_app_config" "split_horizon" {
       lan = ["192.168.0.0/16"]
     }
   })
+
+  # Uninstalling or replacing the app makes the server delete its config.
+  # This sets it again in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_app.config_split_horizon]
+  }
 }
 ```
 

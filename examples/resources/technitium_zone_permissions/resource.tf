@@ -22,4 +22,10 @@ resource "technitium_zone_permissions" "home" {
   # Administrators and DNS Administrators always keep full rights on a zone,
   # so only other groups are listed.
   group_permissions = []
+
+  # Deleting or replacing the zone or user makes the server delete these
+  # rights. This sets them again in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_zone.perm_home, technitium_user.zone_perm_alice]
+  }
 }

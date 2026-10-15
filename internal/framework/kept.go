@@ -37,6 +37,41 @@ func dropKept(a Attr, got, prior tftypes.Value) tftypes.Value {
 	return tftypes.NewValue(got.Type(), out)
 }
 
+// missing reports a configured name of a Refers Table the server dropped.
+func (r *Resource) missing(plan, state map[string]tftypes.Value) error {
+	for _, a := range r.spec.Attrs {
+		if a.Refers == "" || len(a.Columns) == 0 {
+			continue
+		}
+		col := a.Columns[0].Name
+		got := rowNames(state[a.Name], col)
+		for _, name := range rowNames(plan[a.Name], col) {
+			if !slices.Contains(got, name) && !slices.Contains(a.Kept, name) {
+				return fmt.Errorf("%s: %s %q does not exist; create it first or refer to its resource so it's created before this",
+					r.spec.Name, a.Refers, name)
+			}
+		}
+	}
+	return nil
+}
+
+func rowNames(v tftypes.Value, col string) []string {
+	var rows []tftypes.Value
+	if !set(v) || v.As(&rows) != nil {
+		return nil
+	}
+	var out []string
+	for _, row := range rows {
+		var obj map[string]tftypes.Value
+		var name string
+		if row.As(&obj) == nil && set(obj[col]) && obj[col].As(&name) == nil {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 func keptRow(row tftypes.Value) (string, bool, bool) {
 	var obj map[string]tftypes.Value
 	if row.As(&obj) != nil {

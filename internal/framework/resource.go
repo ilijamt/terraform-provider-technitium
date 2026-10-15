@@ -232,6 +232,9 @@ func (r *Resource) Create(ctx context.Context, req resource.CreateRequest, resp 
 	if err == nil && state == nil {
 		err = fmt.Errorf("%s was created but cannot be read back", r.spec.Name)
 	}
+	if err == nil {
+		err = r.missing(plan, state)
+	}
 	if state == nil {
 		state = r.complete(plan)
 	}
@@ -273,11 +276,14 @@ func (r *Resource) Update(ctx context.Context, req resource.UpdateRequest, resp 
 			err = fmt.Errorf("%s disappeared during update", r.spec.Name)
 		}
 	}
+	if err == nil {
+		// The state read back, so the next plan sends the names again.
+		setState(&resp.State, state)
+		err = r.missing(plan, state)
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Update "+r.spec.Name, err.Error())
-		return
 	}
-	setState(&resp.State, state)
 }
 
 func (r *Resource) ModifyPlan(_ context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
@@ -428,6 +434,11 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 			}
 		}
 	}
+	if endpoint == r.spec.Create {
+		if _, err := r.share(ctx, nil, plan); err != nil {
+			return err
+		}
+	}
 	params, err := r.params(plan, func(a Attr) bool { return a.Identity || accepts(a) })
 	if err != nil {
 		return err
@@ -473,6 +484,10 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 }
 
 func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Value) error {
+	moved, err := r.share(ctx, prior, plan)
+	if err != nil {
+		return err
+	}
 	params, err := r.identify(ctx, prior)
 	if err != nil {
 		return err
@@ -542,8 +557,98 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 		if _, err = r.client.Call(uctx, r.spec.Update, params); err != nil {
 			return err
 		}
+		if err = r.restore(ctx, moved, plan); err != nil {
+			return err
+		}
 	}
 	return r.toggle(ctx, prior, plan)
+}
+
+// share checks the Shared value of plan against the other List items, and
+// returns them when the change moves them all with it.
+func (r *Resource) share(ctx context.Context, prior, plan map[string]tftypes.Value) ([]map[string]any, error) {
+	i := slices.IndexFunc(r.spec.Attrs, func(a Attr) bool { return a.Name == r.spec.Shared })
+	if i < 0 || prior != nil && plan[r.spec.Shared].Equal(prior[r.spec.Shared]) {
+		return nil, nil
+	}
+	a, self := r.spec.Attrs[i], plan
+	if prior != nil {
+		self = prior
+	}
+	params, err := r.params(self, func(a Attr) bool { return a.Identity })
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.client.Call(ctx, r.spec.Read, params)
+	if client.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var others []map[string]any
+	for _, item := range r.items(resp, r.spec.List) {
+		if !r.same(item, self) {
+			others = append(others, item)
+		} else if prior == nil && r.located(plan) {
+			// The add call would take it over with another TTL.
+			return nil, fmt.Errorf("%s already exists; import it to manage it", r.spec.Name)
+		}
+	}
+	if len(others) == 0 {
+		return nil, nil
+	}
+	raw, _ := lookup(others[0], a.Key)
+	want, err := a.fromJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", a.Name, err)
+	}
+	switch {
+	case !set(plan[a.Name]):
+		plan[a.Name] = want
+		return nil, nil
+	case plan[a.Name].Equal(want):
+		return nil, nil
+	case prior != nil && prior[a.Name].Equal(want):
+		return others, nil
+	}
+	s, _ := a.param(want)
+	return nil, fmt.Errorf("records at %v of type %v share one %s (%s); set %s = %s on every one",
+		others[0]["name"], others[0]["type"], a.Name, s, a.Name, s)
+}
+
+// restore sends the values of items again with the planned Shared value,
+// since the server drops what it does not keep in the record data when it
+// moves them.
+func (r *Resource) restore(ctx context.Context, items []map[string]any, plan map[string]tftypes.Value) error {
+	for _, item := range items {
+		vals := map[string]tftypes.Value{r.spec.Shared: plan[r.spec.Shared]}
+		for _, a := range r.spec.Attrs {
+			if a.Key == "" || a.Name == r.spec.Shared || a.ReadOnly || !a.Identity && !a.Update {
+				continue
+			}
+			if raw, ok := lookup(item, a.Key); ok {
+				if v, err := a.fromJSON(raw); err == nil {
+					vals[a.Name] = v
+				}
+			} else if d, ok := a.defaultValue(); ok {
+				vals[a.Name] = d
+			}
+		}
+		for _, a := range r.spec.Attrs {
+			if _, ok := vals[a.Name]; !ok && a.Identity {
+				vals[a.Name] = plan[a.Name]
+			}
+		}
+		params, err := r.params(vals, func(Attr) bool { return true })
+		if err != nil {
+			return err
+		}
+		if _, err = r.client.Call(client.Once(ctx), r.spec.Update, params); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Resource) toggle(ctx context.Context, prior, plan map[string]tftypes.Value) error {
@@ -626,9 +731,20 @@ func (r *Resource) read(ctx context.Context, prior map[string]tftypes.Value) (ma
 }
 
 func (r *Resource) find(resp map[string]any, list string, prior map[string]tftypes.Value) map[string]any {
-	items, _ := resp[list].([]any)
+	for _, item := range r.items(resp, list) {
+		if r.same(item, prior) {
+			return item
+		}
+	}
+	return nil
+}
+
+// items are the List items of resp with the Fixed values.
+func (r *Resource) items(resp map[string]any, list string) []map[string]any {
+	var out []map[string]any
+	raws, _ := resp[list].([]any)
 next:
-	for _, it := range items {
+	for _, it := range raws {
 		item, ok := it.(map[string]any)
 		if !ok {
 			continue
@@ -638,22 +754,37 @@ next:
 				continue next
 			}
 		}
-		for _, a := range r.spec.Attrs {
-			if !a.Identity || a.Key == "" || !set(prior[a.Name]) {
-				continue
-			}
-			raw, ok := lookup(item, a.Key)
-			if !ok {
-				continue
-			}
-			got, err := a.fromJSON(raw)
-			if err != nil || !a.matches(r.hideAuto(a, got, item, prior[a.Name]), prior[a.Name]) {
-				continue next
-			}
-		}
-		return item
+		out = append(out, item)
 	}
-	return nil
+	return out
+}
+
+// located is whether every identity value read back is known, so same
+// matches one object only.
+func (r *Resource) located(vals map[string]tftypes.Value) bool {
+	for _, a := range r.spec.Attrs {
+		if a.Identity && a.Key != "" && !set(vals[a.Name]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Resource) same(item map[string]any, vals map[string]tftypes.Value) bool {
+	for _, a := range r.spec.Attrs {
+		if !a.Identity || a.Key == "" || !set(vals[a.Name]) {
+			continue
+		}
+		raw, ok := lookup(item, a.Key)
+		if !ok {
+			continue
+		}
+		got, err := a.fromJSON(raw)
+		if err != nil || !a.matches(r.hideAuto(a, got, item, vals[a.Name]), vals[a.Name]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Resource) identify(ctx context.Context, vals map[string]tftypes.Value) (url.Values, error) {

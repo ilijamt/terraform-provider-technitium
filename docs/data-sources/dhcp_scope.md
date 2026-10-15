@@ -27,7 +27,7 @@ output "lan_router" {
 
 ### Required
 
-- `name` (String) The scope name. Changing it replaces the scope.
+- `name` (String) The scope name. Changing it replaces the scope. Deleting the scope drops its reserved leases and deletes the DNS records of its dynamic leases; the records of reserved leases with a `host_name` stay.
 
 ### Read-Only
 
@@ -38,10 +38,10 @@ output "lan_router" {
 - `dns_overwrite_for_dynamic_lease` (Boolean) Overwrite an existing `A` record with a client's name for dynamic leases.
 - `dns_servers` (List of String) The DNS server addresses clients use (option 6). Ignored when `use_this_dns_server` is `true`.
 - `dns_ttl` (Number) The TTL of the DNS records added for clients.
-- `dns_updates` (Boolean) Add and remove forward and reverse DNS records for clients in `domain_name`.
-- `domain_name` (String) The domain name of the network (option 15). With `dns_updates`, clients get forward and reverse DNS records in it.
+- `dns_updates` (Boolean) Add and remove forward and reverse DNS records for clients in `domain_name`. A reserved lease replaces every `A` record at its name and `PTR` record at its reverse name, and so does a dynamic lease with `dns_overwrite_for_dynamic_lease`; removing the lease deletes its records. Don't manage records at DHCP host names with `technitium_record_*`.
+- `domain_name` (String) The domain name of the network (option 15). With `dns_updates`, clients get forward and reverse DNS records in it. The server creates a primary zone for this domain, and one for the scope's reverse network, when no zone holds them, so a later `technitium_zone` for them fails with "already exists". Create those zones first: set this to the `technitium_zone`'s `zone` and add the reverse zone to `depends_on`.
 - `domain_search_list` (List of String) The domain names clients append when resolving short names (option 119).
-- `enabled` (Boolean) Whether the scope hands out addresses. Technitium enables a new scope; it serves only on a network interface in the scope's subnet.
+- `enabled` (Boolean) Whether the scope hands out addresses. Technitium enables a new scope; it serves only on a network interface in the scope's subnet. Disabling it deletes the DNS records of its dynamic leases and enabling it adds them back; the records of reserved leases stay.
 - `ending_address` (String) The last IP address the scope hands out.
 - `exclusions` (Attributes Set) Address ranges in the scope that are never handed out dynamically. An empty set removes them. (see [below for nested schema](#nestedatt--exclusions))
 - `generic_options` (Attributes Set) DHCP options without an attribute of their own. An empty set removes them. (see [below for nested schema](#nestedatt--generic_options))

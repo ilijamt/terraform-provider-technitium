@@ -37,6 +37,12 @@ resource "technitium_zone_permissions" "home" {
   # Administrators and DNS Administrators always keep full rights on a zone,
   # so only other groups are listed.
   group_permissions = []
+
+  # Deleting or replacing the zone or user makes the server delete these
+  # rights. This sets them again in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_zone.perm_home, technitium_user.zone_perm_alice]
+  }
 }
 ```
 
@@ -49,8 +55,8 @@ resource "technitium_zone_permissions" "home" {
 
 ### Optional
 
-- `group_permissions` (Attributes Set) The rights of groups on the zone. The server always keeps `Administrators` and `DNS Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Leaving it out keeps the server's. (see [below for nested schema](#nestedatt--group_permissions))
-- `user_permissions` (Attributes Set) The rights of individual users on the zone. An empty set removes them; leaving it out keeps the server's. (see [below for nested schema](#nestedatt--user_permissions))
+- `group_permissions` (Attributes Set) The rights of groups on the zone. The server always keeps `Administrators` and `DNS Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Leaving it out keeps the server's. The server silently drops a group that does not exist, and apply fails: refer to the `technitium_group` resource, or add `depends_on`, so the group is created first. (see [below for nested schema](#nestedatt--group_permissions))
+- `user_permissions` (Attributes Set) The rights of individual users on the zone. An empty set removes them; leaving it out keeps the server's. The server silently drops a user that does not exist, and apply fails: refer to the `technitium_user` resource, or add `depends_on`, so the user is created first. (see [below for nested schema](#nestedatt--user_permissions))
 
 ### Read-Only
 

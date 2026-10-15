@@ -1,8 +1,11 @@
 package technitium
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
 )
@@ -19,7 +22,7 @@ var user = framework.Spec{
 	Delete:      "/api/admin/users/delete",
 	Attrs: []framework.Attr{
 		{Name: "username", Param: "user", Type: framework.String, Key: "username", Required: true, Identity: true, Create: true, Update: true, Pattern: username,
-			Description: "The username, in lower case. Changing it replaces the user."},
+			Description: "The username, in lower case. Changing it replaces the user. Deleting or replacing the user also deletes its sessions and API tokens, its rights in `technitium_permissions_*` and `technitium_zone_permissions`, and its group memberships: add `replace_triggered_by` on the `technitium_api_token`, `technitium_group_members` and permissions resources that name it to set them again in the same apply."},
 		{Name: "password", Param: "newPass", CreateParam: "pass", Type: framework.String, Required: true, Sensitive: true, Create: true, Update: true, OnChange: true,
 			Description: "The password. The server never returns it, so a password changed outside Terraform is not detected, and is kept until this one changes."},
 		{Name: "display_name", Param: "displayName", Type: framework.String, Key: "displayName", Create: true, Update: true,
@@ -42,23 +45,35 @@ var group = framework.Spec{
 	Delete:      "/api/admin/groups/delete",
 	Attrs: []framework.Attr{
 		{Name: "name", Param: "group", Type: framework.String, Key: "name", Required: true, Identity: true, Create: true, Update: true,
-			Description: "The group name. Changing it replaces the group."},
+			Description: "The group name. Changing it replaces the group. Deleting or replacing the group also removes its members and its rights in `technitium_permissions_*` and `technitium_zone_permissions`: add `replace_triggered_by` on the `technitium_group_members` and permissions resources that name it to set them again in the same apply."},
 		{Name: "description", Param: "description", Type: framework.String, Key: "description", Create: true, Update: true,
 			Description: "The group description."},
 	},
+}
+
+// checkGroupMembers refuses Everyone: the server adds every new user to it
+// and refuses to take anyone out, so its member list cannot be managed. A
+// plan check rather than a validator keeps the data source able to read it.
+func checkGroupMembers(_, plan map[string]tftypes.Value) error {
+	var group string
+	if plan["group"].IsKnown() && plan["group"].As(&group) == nil && strings.EqualFold(group, "Everyone") {
+		return errors.New("the Everyone group cannot be managed: the server adds every new user to it and refuses to remove any")
+	}
+	return nil
 }
 
 // groupMembers is apart from the group so the built-in groups' members can
 // be managed too. The server only takes the whole list.
 var groupMembers = framework.Spec{
 	Name: "group_members",
-	Description: "Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included. " +
+	Description: "Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included, except `Everyone`: every user is a member of it, as the server adds each new user and refuses to remove any. " +
 		"Users left out are removed from the group. The server adds the user the provider logs in as back to `Administrators`, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.",
 	Read:   "/api/admin/groups/get",
 	Update: "/api/admin/groups/set",
+	Check:  checkGroupMembers,
 	Attrs: []framework.Attr{
 		{Name: "group", Param: "group", Type: framework.String, Key: "name", Required: true, Identity: true, Update: true,
-			Description: "The group name. Changing it moves the resource to another group."},
+			Description: "The group name. Changing it moves the resource to another group. `Everyone` is refused."},
 		{Name: "members", Param: "members", Type: framework.List, Key: "members", Required: true, Update: true,
 			Description: "The usernames of the members, in alphabetical order as the server returns them. An empty list removes all members."},
 	},
@@ -89,6 +104,12 @@ func kept(groups []string) string {
 	return fmt.Sprintf("The server always keeps %s with full rights, whatever is set: leave them out, or list them with full rights. ", strings.Join(names, " and "))
 }
 
+// unknown explains the server dropping names it does not know without an
+// error, which the provider reports.
+func unknown(kind string) string {
+	return fmt.Sprintf("The server silently drops a %[1]s that does not exist, and apply fails: refer to the `technitium_%[1]s` resource, or add `depends_on`, so the %[1]s is created first.", kind)
+}
+
 var permissions = func() []framework.Spec {
 	var out []framework.Spec
 	for _, s := range permissionSections {
@@ -101,11 +122,11 @@ var permissions = func() []framework.Spec {
 			Fixed:  map[string]string{"section": s.section},
 			Attrs: []framework.Attr{
 				{Name: "user_permissions", Param: "userPermissions", Type: framework.Table, Key: "userPermissions", Update: true,
-					Columns:     rights("username", "username", "The username."),
-					Description: "The rights of individual users. An empty set removes them; leaving it out keeps the server's."},
+					Columns: rights("username", "username", "The username."), Refers: "user",
+					Description: "The rights of individual users. An empty set removes them; leaving it out keeps the server's. " + unknown("user")},
 				{Name: "group_permissions", Param: "groupPermissions", Type: framework.Table, Key: "groupPermissions", Update: true,
-					Columns: rights("name", "name", "The group name."), Kept: s.kept,
-					Description: "The rights of groups. " + kept(s.kept) + "Leaving it out keeps the server's."},
+					Columns: rights("name", "name", "The group name."), Kept: s.kept, Refers: "group",
+					Description: "The rights of groups. " + kept(s.kept) + "Leaving it out keeps the server's. " + unknown("group")},
 			},
 		})
 	}
@@ -117,7 +138,8 @@ var permissions = func() []framework.Spec {
 var apiToken = framework.Spec{
 	Name: "api_token",
 	Description: "Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no `token` value. " +
-		"Changing the user or name issues a new token; destroying the resource revokes it.",
+		"Changing the user or name issues a new token; destroying the resource revokes it. " +
+		"The server refuses to revoke the token a call is made with, so destroying or replacing the token the provider itself uses fails: switch the provider to another token or a password first.",
 	Create: "/api/admin/sessions/createToken",
 	Read:   "/api/admin/sessions/list",
 	Delete: "/api/admin/sessions/delete",
@@ -150,11 +172,11 @@ var zonePermissions = framework.Spec{
 		{Name: "zone", Param: "zone", Type: framework.String, Key: "subItem", Required: true, Identity: true, Update: true,
 			Description: "The zone. Changing it moves the resource to another zone."},
 		{Name: "user_permissions", Param: "userPermissions", Type: framework.Table, Key: "userPermissions", Update: true,
-			Columns:     rights("username", "username", "The username."),
-			Description: "The rights of individual users on the zone. An empty set removes them; leaving it out keeps the server's."},
+			Columns: rights("username", "username", "The username."), Refers: "user",
+			Description: "The rights of individual users on the zone. An empty set removes them; leaving it out keeps the server's. " + unknown("user")},
 		{Name: "group_permissions", Param: "groupPermissions", Type: framework.Table, Key: "groupPermissions", Update: true,
-			Columns: rights("name", "name", "The group name."), Kept: zoneKept,
-			Description: "The rights of groups on the zone. " + kept(zoneKept) + "Leaving it out keeps the server's."},
+			Columns: rights("name", "name", "The group name."), Kept: zoneKept, Refers: "group",
+			Description: "The rights of groups on the zone. " + kept(zoneKept) + "Leaving it out keeps the server's. " + unknown("group")},
 	},
 }
 

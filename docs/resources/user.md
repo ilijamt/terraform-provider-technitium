@@ -31,7 +31,7 @@ resource "technitium_user" "alice" {
 ### Required
 
 - `password` (String, Sensitive) The password. The server never returns it, so a password changed outside Terraform is not detected, and is kept until this one changes.
-- `username` (String) The username, in lower case. Changing it replaces the user.
+- `username` (String) The username, in lower case. Changing it replaces the user. Deleting or replacing the user also deletes its sessions and API tokens, its rights in `technitium_permissions_*` and `technitium_zone_permissions`, and its group memberships: add `replace_triggered_by` on the `technitium_api_token`, `technitium_group_members` and permissions resources that name it to set them again in the same apply.
 
 ### Optional
 

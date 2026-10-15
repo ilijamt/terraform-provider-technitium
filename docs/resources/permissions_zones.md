@@ -37,6 +37,12 @@ resource "technitium_permissions_zones" "this" {
   group_permissions = [
     { name = technitium_group.perms_ops.name, can_view = true, can_modify = true, can_delete = false },
   ]
+
+  # Deleting or replacing the user or group makes the server delete its rights.
+  # This sets them again in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_user.perms_alice, technitium_group.perms_ops]
+  }
 }
 ```
 
@@ -45,8 +51,8 @@ resource "technitium_permissions_zones" "this" {
 
 ### Optional
 
-- `group_permissions` (Attributes Set) The rights of groups. The server always keeps `Administrators` and `DNS Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Leaving it out keeps the server's. (see [below for nested schema](#nestedatt--group_permissions))
-- `user_permissions` (Attributes Set) The rights of individual users. An empty set removes them; leaving it out keeps the server's. (see [below for nested schema](#nestedatt--user_permissions))
+- `group_permissions` (Attributes Set) The rights of groups. The server always keeps `Administrators` and `DNS Administrators` with full rights, whatever is set: leave them out, or list them with full rights. Leaving it out keeps the server's. The server silently drops a group that does not exist, and apply fails: refer to the `technitium_group` resource, or add `depends_on`, so the group is created first. (see [below for nested schema](#nestedatt--group_permissions))
+- `user_permissions` (Attributes Set) The rights of individual users. An empty set removes them; leaving it out keeps the server's. The server silently drops a user that does not exist, and apply fails: refer to the `technitium_user` resource, or add `depends_on`, so the user is created first. (see [below for nested schema](#nestedatt--user_permissions))
 
 ### Read-Only
 

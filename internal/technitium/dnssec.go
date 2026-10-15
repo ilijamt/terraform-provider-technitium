@@ -430,7 +430,15 @@ func (r *zoneDNSSEC) Delete(ctx context.Context, req resource.DeleteRequest, res
 	if resp.Diagnostics.Append(req.State.Get(ctx, &state)...); resp.Diagnostics.HasError() {
 		return
 	}
-	if _, err := r.api.Call(ctx, "/api/zones/dnssec/unsign", url.Values{"zone": {state.Zone.ValueString()}}); err != nil && !client.IsNotFound(err) {
+	_, err := r.api.Call(ctx, "/api/zones/dnssec/unsign", url.Values{"zone": {state.Zone.ValueString()}})
+	// Unsign is not sent again after a dropped connection, as it may have
+	// taken effect; the status tells.
+	if client.IsDropped(err) {
+		if info, rerr := readDNSSEC(ctx, r.api, state.Zone.ValueString()); rerr == nil && (info == nil || info.status == "Unsigned") {
+			err = nil
+		}
+	}
+	if err != nil && !client.IsNotFound(err) {
 		resp.Diagnostics.AddError("Unsign zone", err.Error())
 	}
 }

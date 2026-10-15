@@ -3,12 +3,12 @@
 page_title: "technitium_api_token Resource - technitium"
 subcategory: ""
 description: |-
-  Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no token value. Changing the user or name issues a new token; destroying the resource revokes it.
+  Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no token value. Changing the user or name issues a new token; destroying the resource revokes it. The server refuses to revoke the token a call is made with, so destroying or replacing the token the provider itself uses fails: switch the provider to another token or a password first.
 ---
 
 # technitium_api_token (Resource)
 
-Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no `token` value. Changing the user or name issues a new token; destroying the resource revokes it.
+Issues an API token for a user, for tools that call the HTTP API. The token is only known when it is created, so an imported token has no `token` value. Changing the user or name issues a new token; destroying the resource revokes it. The server refuses to revoke the token a call is made with, so destroying or replacing the token the provider itself uses fails: switch the provider to another token or a password first.
 
 ## Example Usage
 
@@ -26,6 +26,12 @@ resource "technitium_user" "token_external_dns" {
 resource "technitium_api_token" "external_dns" {
   username   = technitium_user.token_external_dns.username
   token_name = "external-dns"
+
+  # Deleting or replacing the user makes the server delete its tokens. This
+  # issues a new one in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_user.token_external_dns]
+  }
 }
 
 output "external_dns_token" {

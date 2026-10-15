@@ -3,12 +3,12 @@
 page_title: "technitium_app Resource - technitium"
 subcategory: ""
 description: |-
-  Installs a DNS app from a download URL, such as one from the DNS App Store. Changing the URL updates the app in place; destroying the resource uninstalls it.
+  Installs a DNS app from a download URL, such as one from the DNS App Store. Changing the URL updates the app in place, keeping its config; destroying or replacing the resource uninstalls it, which deletes its config. Add replace_triggered_by on its technitium_app_config to set the config again in the same apply.
 ---
 
 # technitium_app (Resource)
 
-Installs a DNS app from a download URL, such as one from the DNS App Store. Changing the URL updates the app in place; destroying the resource uninstalls it.
+Installs a DNS app from a download URL, such as one from the DNS App Store. Changing the URL updates the app in place, keeping its config; destroying or replacing the resource uninstalls it, which deletes its config. Add `replace_triggered_by` on its `technitium_app_config` to set the config again in the same apply.
 
 ## Example Usage
 

@@ -27,7 +27,7 @@ output "administrators" {
 
 ### Required
 
-- `group` (String) The group name. Changing it moves the resource to another group.
+- `group` (String) The group name. Changing it moves the resource to another group. `Everyone` is refused.
 
 ### Read-Only
 

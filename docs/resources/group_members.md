@@ -3,12 +3,12 @@
 page_title: "technitium_group_members Resource - technitium"
 subcategory: ""
 description: |-
-  Manages the full member list of a group, built-in groups (Administrators, DHCP Administrators, DNS Administrators) included. Users left out are removed from the group. The server adds the user the provider logs in as back to Administrators, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.
+  Manages the full member list of a group, built-in groups (Administrators, DHCP Administrators, DNS Administrators) included, except Everyone: every user is a member of it, as the server adds each new user and refuses to remove any. Users left out are removed from the group. The server adds the user the provider logs in as back to Administrators, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.
 ---
 
 # technitium_group_members (Resource)
 
-Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included. Users left out are removed from the group. The server adds the user the provider logs in as back to `Administrators`, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.
+Manages the full member list of a group, built-in groups (`Administrators`, `DHCP Administrators`, `DNS Administrators`) included, except `Everyone`: every user is a member of it, as the server adds each new user and refuses to remove any. Users left out are removed from the group. The server adds the user the provider logs in as back to `Administrators`, so list that user there, or apply fails with an inconsistent result. Destroying the resource leaves the members as they are.
 
 ## Example Usage
 
@@ -30,6 +30,12 @@ resource "technitium_group" "members_ops" {
 resource "technitium_group_members" "ops" {
   group   = technitium_group.members_ops.name
   members = [technitium_user.members_alice.username]
+
+  # Deleting or replacing the group or a member makes the server drop the
+  # membership. This sets the members again in the same apply.
+  lifecycle {
+    replace_triggered_by = [technitium_group.members_ops, technitium_user.members_alice]
+  }
 }
 
 resource "technitium_group_members" "administrators" {
@@ -43,7 +49,7 @@ resource "technitium_group_members" "administrators" {
 
 ### Required
 
-- `group` (String) The group name. Changing it moves the resource to another group.
+- `group` (String) The group name. Changing it moves the resource to another group. `Everyone` is refused.
 - `members` (List of String) The usernames of the members, in alphabetical order as the server returns them. An empty list removes all members.
 
 ### Read-Only

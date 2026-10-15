@@ -3,12 +3,12 @@
 page_title: "technitium_dhcp_reserved_lease Resource - technitium"
 subcategory: ""
 description: |-
-  Reserves an IP address in a DHCP scope for one device. Changing any attribute replaces the reservation.
+  Reserves an IP address in a DHCP scope for one device. Changing any attribute replaces the reservation. Deleting or replacing the scope drops the reservation.
 ---
 
 # technitium_dhcp_reserved_lease (Resource)
 
-Reserves an IP address in a DHCP scope for one device. Changing any attribute replaces the reservation.
+Reserves an IP address in a DHCP scope for one device. Changing any attribute replaces the reservation. Deleting or replacing the scope drops the reservation.
 
 ## Example Usage
 
@@ -40,7 +40,7 @@ resource "technitium_dhcp_reserved_lease" "nas" {
 ### Optional
 
 - `comments` (String) Comments stored with the reservation.
-- `host_name` (String) The host name to give the device instead of the one it sends.
+- `host_name` (String) The host name to give the device instead of the one it sends. When the scope has `dns_updates`, adding the reservation sets the `A` record at this name in the scope's `domain_name` and the `PTR` record at the address's reverse name, replacing any others there, and creating their zones when missing. Removing the reservation deletes them. Create the zones before the scope, and don't manage other records at this name.
 
 ### Read-Only
 

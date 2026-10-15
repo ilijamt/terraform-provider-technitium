@@ -3,12 +3,12 @@
 page_title: "technitium_blocked_zone Resource - technitium"
 subcategory: ""
 description: |-
-  Blocks a domain name and its subdomains, answering as blocking_type in technitium_settings_blocking says. Blocking must be on (enable_blocking).
+  Blocks a domain name and its subdomains, answering as blocking_type in technitium_settings_blocking says. Blocking must be on (enable_blocking). Creating an entry that already exists fails: import it instead.
 ---
 
 # technitium_blocked_zone (Resource)
 
-Blocks a domain name and its subdomains, answering as `blocking_type` in `technitium_settings_blocking` says. Blocking must be on (`enable_blocking`).
+Blocks a domain name and its subdomains, answering as `blocking_type` in `technitium_settings_blocking` says. Blocking must be on (`enable_blocking`). Creating an entry that already exists fails: import it instead.
 
 ## Example Usage
 
@@ -23,7 +23,7 @@ resource "technitium_blocked_zone" "tracker" {
 
 ### Required
 
-- `domain` (String) The domain name, without a trailing dot. Its subdomains are blocked too.
+- `domain` (String) The domain name, without a trailing dot. Its subdomains are blocked too. An IP address or network is refused, as the server would store it under its reverse name, such as `5.1.168.192.in-addr.arpa` for `192.168.1.5`.
 
 ### Read-Only
 

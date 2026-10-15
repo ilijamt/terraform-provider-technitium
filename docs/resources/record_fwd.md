@@ -39,7 +39,7 @@ resource "technitium_record_fwd" "lan" {
 ### Optional
 
 - `comments` (String) Comments stored with the record.
-- `disable` (Boolean) Disable the record without deleting it. Defaults to `false`.
+- `disable` (Boolean) Disable the record without deleting it. A DNSSEC signed zone refuses disabled records, and a zone that holds one cannot be signed. Defaults to `false`.
 - `dnssec_validation` (Boolean) Validate the forwarder's answers with DNSSEC. Defaults to `false`.
 - `expiry_ttl` (Number) Deletes the record automatically this many seconds after it was last modified. Terraform then creates it again on the next apply. Defaults to `0`, which keeps the record.
 - `forwarder_priority` (Number) The forwarder's priority. Lower values are queried first; forwarders with the same priority are queried together.

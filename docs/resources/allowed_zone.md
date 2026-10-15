@@ -3,12 +3,12 @@
 page_title: "technitium_allowed_zone Resource - technitium"
 subcategory: ""
 description: |-
-  Allows a domain name and its subdomains, even when a block list blocks them. Blocking must be on (enable_blocking).
+  Allows a domain name and its subdomains, even when a block list blocks them. Blocking must be on (enable_blocking). Creating an entry that already exists fails: import it instead.
 ---
 
 # technitium_allowed_zone (Resource)
 
-Allows a domain name and its subdomains, even when a block list blocks them. Blocking must be on (`enable_blocking`).
+Allows a domain name and its subdomains, even when a block list blocks them. Blocking must be on (`enable_blocking`). Creating an entry that already exists fails: import it instead.
 
 ## Example Usage
 
@@ -23,7 +23,7 @@ resource "technitium_allowed_zone" "cdn" {
 
 ### Required
 
-- `domain` (String) The domain name, without a trailing dot. Its subdomains are allowed too.
+- `domain` (String) The domain name, without a trailing dot. Its subdomains are allowed too. An IP address or network is refused, as the server would store it under its reverse name, such as `5.1.168.192.in-addr.arpa` for `192.168.1.5`.
 
 ### Read-Only
 

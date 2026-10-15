@@ -27,7 +27,6 @@ func TestAccExport(t *testing.T) {
 	resetLDAP(t)
 	c := api(t)
 	// The app needs the DNS App Store; without it the export runs without.
-	// It goes in before the SSO change below restarts the web service.
 	app := tryStoreURL(t, "Split Horizon")
 	if app != "" {
 		call(t, c, "/api/apps/downloadAndInstall", url.Values{"name": {"Split Horizon"}, "url": {app}})
@@ -57,7 +56,9 @@ func TestAccExport(t *testing.T) {
 		{"/api/allowed/add", url.Values{"domain": {"cdn.export.test"}}},
 		{"/api/settings/set", url.Values{"tsigKeys": {"export-key|c2VjcmV0LWtleQ==|hmac-sha256"}}},
 		{"/api/admin/ldap/set", url.Values{"ldapServer": {"ldap.example.com"}, "ldapBindUsername": {"CN=svc,DC=example,DC=com"}, "ldapBindPassword": {"s3cret"}, "ldapGroupMap": {"CN=dns,DC=example,DC=com|DNS Administrators"}}},
-		{"/api/admin/sso/set", url.Values{"ssoClientId": {"technitium"}, "ssoClientSecret": {"s3cret"}, "ssoAuthority": {"https://idp.example.com/realms/home"}, "ssoGroupMap": {"dns-admins|DNS Administrators"}}},
+		// Without ssoEnabled=false the server restarts its web service 2s
+		// later, dropping the connections of the apply or destroy below.
+		{"/api/admin/sso/set", url.Values{"ssoEnabled": {"false"}, "ssoClientId": {"technitium"}, "ssoClientSecret": {"s3cret"}, "ssoAuthority": {"https://idp.example.com/realms/home"}, "ssoGroupMap": {"dns-admins|DNS Administrators"}}},
 	} {
 		call(t, c, step.path, step.params)
 	}

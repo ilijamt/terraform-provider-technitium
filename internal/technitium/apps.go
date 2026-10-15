@@ -14,7 +14,7 @@ import (
 // app from it.
 var app = framework.Spec{
 	Name:        "app",
-	Description: "Installs a DNS app from a download URL, such as one from the DNS App Store. Changing the URL updates the app in place; destroying the resource uninstalls it.",
+	Description: "Installs a DNS app from a download URL, such as one from the DNS App Store. Changing the URL updates the app in place, keeping its config; destroying or replacing the resource uninstalls it, which deletes its config. Add `replace_triggered_by` on its `technitium_app_config` to set the config again in the same apply.",
 	Create:      "/api/apps/downloadAndInstall",
 	Read:        "/api/apps/list",
 	Update:      "/api/apps/downloadAndUpdate",
@@ -55,7 +55,7 @@ func checkApp(prior, plan map[string]tftypes.Value) error {
 
 var appConfig = framework.Spec{
 	Name:        "app_config",
-	Description: "Manages the config of an installed DNS app. The format is the app's own, usually JSON. Destroying the resource leaves the config as it is.",
+	Description: "Manages the config of an installed DNS app. The format is the app's own, usually JSON. Destroying the resource leaves the config as it is. Uninstalling or replacing the app deletes its config: add `replace_triggered_by` on the `technitium_app` to set it again in the same apply.",
 	Read:        "/api/apps/config/get",
 	Update:      "/api/apps/config/set",
 	Attrs: []framework.Attr{

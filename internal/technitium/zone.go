@@ -93,12 +93,15 @@ var zoneConvert = framework.Convert{
 }
 
 var zone = framework.Spec{
-	Name:        "zone",
-	Description: "Manages an authoritative zone.",
-	Create:      "/api/zones/create",
-	Read:        "/api/zones/options/get",
-	Update:      "/api/zones/options/set",
-	Delete:      "/api/zones/delete",
+	Name: "zone",
+	Description: "Manages an authoritative zone. A new `Primary` zone, also one converted from `Forwarder`, gets an NS record at the apex naming the server, its `dns_server_domain` in `technitium_settings_general`. " +
+		"Deleting or replacing the zone also deletes its own permissions, so add `replace_triggered_by` on its `technitium_zone_permissions` to set them again in the same apply. " +
+		"Deleting a `Catalog` zone takes its member zones out of it: their `catalog` shows a change on the next plan. Deleting a `SecondaryCatalog` zone deletes its member zones. " +
+		"On a member of a `SecondaryCatalog` zone the server ignores changes to `primary_*`, `override_catalog_*`, `query_access*` and `zone_transfer*`, which come from the catalog, and apply fails with an inconsistent result; only `disabled`, `notify*` and `update*` can be changed.",
+	Create: "/api/zones/create",
+	Read:   "/api/zones/options/get",
+	Update: "/api/zones/options/set",
+	Delete: "/api/zones/delete",
 	// A Forwarder zone starts empty; its forwarders are technitium_record_fwd
 	// resources at the zone apex.
 	CreateFixed: map[string]string{"initializeForwarder": "false"},

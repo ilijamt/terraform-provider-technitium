@@ -29,11 +29,11 @@ resource "technitium_settings_general" "this" {
 - `default_responsible_person` (String) The responsible person email address for the SOA record of new Primary zones.
 - `default_soa_record_ttl` (Number) The TTL for SOA records in Primary zones added or updated without one.
 - `dns_apps_enable_automatic_update` (Boolean) Update installed DNS apps from the DNS App Store automatically, checking every 24 hours.
-- `dns_server_domain` (String) The domain name this DNS server identifies itself with.
+- `dns_server_domain` (String) The domain name this DNS server identifies itself with. Changing it makes the server rewrite the SOA primary name server and the apex `NS` record of every Primary zone whose SOA names the old domain. The rewritten SOA loses its serial date scheme and comments, so `technitium_record_soa` resources of those zones show changes. With a self-signed web service certificate, the server also generates a new one.
 - `dns_server_enable_check_for_update` (Boolean) Check whether a Technitium update is available, which the web console asks for after a user logs in.
 - `dns_server_ipv4_source_addresses` (List of String) The IPv4 addresses or networks the DNS server sends outbound queries from, when the server is on two or more networks. By default it uses the address of the network with the default route.
 - `dns_server_ipv6_source_addresses` (List of String) The IPv6 addresses or networks the DNS server sends outbound queries from, when the server is on two or more networks. By default it uses the address of the network with the default route. Used only when `ipv6_mode` is `Preferred`.
-- `dns_server_local_end_points` (List of String) The local IP addresses and ports the DNS server listens on, for example `0.0.0.0:53` and `[::]:53`.
+- `dns_server_local_end_points` (List of String) The local IP addresses and ports the DNS server listens on, for example `0.0.0.0:53` and `[::]:53`. An empty list, and an end point with port `0` or no port, are refused: the server stores them as those two defaults and port `53`. Changing it restarts the DNS service.
 - `dnssec_validation` (Boolean) Validate every response from name servers and forwarders with DNSSEC.
 - `edns_client_subnet` (Boolean) Send EDNS Client Subnet: the client's public IP address cut to a prefix, or the Client Subnet option the request already carries.
 - `edns_client_subnet_ipv4_override` (String) The IPv4 network to send as the client subnet for every outbound query, instead of the client's own.

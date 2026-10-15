@@ -45,3 +45,23 @@ func TestKeptValidator(t *testing.T) {
 	assert.False(t, check(row("Administrators", true), row("Ops", false)))
 	assert.True(t, check(row("Administrators", false)), "less than full rights for a kept group")
 }
+
+func TestMissing(t *testing.T) {
+	a := Attr{Name: "group_permissions", Type: Table, Kept: []string{"Administrators"}, Refers: "group", Columns: []Column{
+		{Name: "name", Type: String}, {Name: "can_view", Type: Bool}, {Name: "can_modify", Type: Bool}, {Name: "can_delete", Type: Bool},
+	}}
+	r := &Resource{spec: Spec{Name: "permissions_logs", Attrs: []Attr{a}}}
+	row := func(name string) tftypes.Value {
+		return tftypes.NewValue(a.row(), map[string]tftypes.Value{
+			"name": str(name), "can_view": boolean(true), "can_modify": boolean(true), "can_delete": boolean(true),
+		})
+	}
+	rows := func(r ...tftypes.Value) map[string]tftypes.Value {
+		return map[string]tftypes.Value{a.Name: tftypes.NewValue(a.tf(), r)}
+	}
+
+	assert.NoError(t, r.missing(rows(row("Administrators"), row("Ops")), rows(row("Ops"))), "kept names are never missing")
+	assert.EqualError(t, r.missing(rows(row("Ops"), row("Nope")), rows(row("Ops"))),
+		`permissions_logs: group "Nope" does not exist; create it first or refer to its resource so it's created before this`)
+	assert.NoError(t, r.missing(map[string]tftypes.Value{a.Name: tftypes.NewValue(a.tf(), nil)}, rows(row("Ops"))), "unset")
+}

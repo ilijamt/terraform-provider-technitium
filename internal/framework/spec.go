@@ -29,6 +29,13 @@ type Spec struct {
 	// UpdateOnce is for an update call that finds the object by its old
 	// values, so resending it after a dropped connection fails.
 	UpdateOnce bool
+	// Shared names an attribute every List item shares, such as the TTL of
+	// the records at one name and type, which the server sets on all of them
+	// when one changes. An unset value takes theirs, and another value is
+	// refused unless the object already had theirs and moves them all.
+	// Creating an object that already exists is refused too, since the
+	// server would take it over with the new value.
+	Shared string
 
 	Attrs []Attr
 }
@@ -109,7 +116,11 @@ type Attr struct {
 	Columns []Column
 	// Kept are names in a permissions Table the server always keeps with
 	// every right; they may be left out of the configuration.
-	Kept    []string
+	Kept []string
+	// Refers is the kind of object the first column of a Table names, such
+	// as "user": the server drops a name that does not exist without an
+	// error, and the provider reports it.
+	Refers  string
 	Toggle  *Toggle
 	Convert *Convert
 	Source  *Source

@@ -24,7 +24,7 @@ resource "technitium_group" "ops" {
 
 ### Required
 
-- `name` (String) The group name. Changing it replaces the group.
+- `name` (String) The group name. Changing it replaces the group. Deleting or replacing the group also removes its members and its rights in `technitium_permissions_*` and `technitium_zone_permissions`: add `replace_triggered_by` on the `technitium_group_members` and permissions resources that name it to set them again in the same apply.
 
 ### Optional
 

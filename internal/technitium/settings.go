@@ -1,15 +1,23 @@
 package technitium
 
-import "github.com/ilijamt/terraform-provider-technitium/internal/framework"
+import (
+	"errors"
+	"fmt"
+	"net"
+
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
+
+	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
+)
 
 // Each settings area sends only its own parameters, so they do not
 // overwrite each other.
 var settings = []framework.Spec{
-	settingsArea("general", "Manages the general DNS server settings: identity, end points, zone defaults, EDNS Client Subnet, query rate limits, timeouts and sockets (the General tab of the Settings page).",
+	checked(checkLocalEndPoints, settingsArea("general", "Manages the general DNS server settings: identity, end points, zone defaults, EDNS Client Subnet, query rate limits, timeouts and sockets (the General tab of the Settings page).",
 		framework.Attr{Name: "dns_server_domain", Param: "dnsServerDomain", Type: framework.String, Key: "dnsServerDomain",
-			Description: "The domain name this DNS server identifies itself with."},
+			Description: "The domain name this DNS server identifies itself with. Changing it makes the server rewrite the SOA primary name server and the apex `NS` record of every Primary zone whose SOA names the old domain. The rewritten SOA loses its serial date scheme and comments, so `technitium_record_soa` resources of those zones show changes. With a self-signed web service certificate, the server also generates a new one."},
 		framework.Attr{Name: "dns_server_local_end_points", Param: "dnsServerLocalEndPoints", Type: framework.List, Key: "dnsServerLocalEndPoints",
-			Description: "The local IP addresses and ports the DNS server listens on, for example `0.0.0.0:53` and `[::]:53`."},
+			Description: "The local IP addresses and ports the DNS server listens on, for example `0.0.0.0:53` and `[::]:53`. An empty list, and an end point with port `0` or no port, are refused: the server stores them as those two defaults and port `53`. Changing it restarts the DNS service."},
 		framework.Attr{Name: "dns_server_ipv4_source_addresses", Param: "dnsServerIPv4SourceAddresses", Type: framework.List, Key: "dnsServerIPv4SourceAddresses",
 			Description: "The IPv4 addresses or networks the DNS server sends outbound queries from, when the server is on two or more networks. By default it uses the address of the network with the default route."},
 		framework.Attr{Name: "dns_server_ipv6_source_addresses", Param: "dnsServerIPv6SourceAddresses", Type: framework.List, Key: "dnsServerIPv6SourceAddresses",
@@ -84,12 +92,12 @@ var settings = []framework.Spec{
 			Description: "The receive buffer size in KB of the UDP and UdpProxy listener sockets. Valid range is `8`-`65536`. Technitium's default is `2048`."},
 		framework.Attr{Name: "max_concurrent_resolutions_per_core", Param: "maxConcurrentResolutionsPerCore", Type: framework.Int64, Key: "maxConcurrentResolutionsPerCore",
 			Description: "The most concurrent outbound resolutions per CPU core. Technitium's default is `100`."},
-	),
-	settingsArea("web_service", "Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page).",
+	)),
+	checked(checkWebServiceTLS, settingsArea("web_service", "Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call, and calls other resources make during the restart fail, so apply those changes on their own.",
 		framework.Attr{Name: "web_service_local_addresses", Param: "webServiceLocalAddresses", Type: framework.List, Key: "webServiceLocalAddresses",
-			Description: "The local IP addresses the web console and HTTP API listen on."},
+			Description: "The local IP addresses the web console and HTTP API listen on. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match."},
 		framework.Attr{Name: "web_service_http_port", Param: "webServiceHttpPort", Type: framework.Int64, Key: "webServiceHttpPort",
-			Description: "The TCP port of the web console and HTTP API. Technitium's default is `5380`."},
+			Description: "The TCP port of the web console and HTTP API. Technitium's default is `5380`. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match."},
 		framework.Attr{Name: "web_service_enable_http_unix_socket", Param: "webServiceEnableHttpUnixSocket", Type: framework.Bool, Key: "webServiceEnableHttpUnixSocket",
 			Description: "Serve the web console and HTTP API over a Unix domain socket as well."},
 		framework.Attr{Name: "web_service_http_unix_socket", Param: "webServiceHttpUnixSocket", Type: framework.String, Key: "webServiceHttpUnixSocket",
@@ -99,13 +107,13 @@ var settings = []framework.Spec{
 		framework.Attr{Name: "web_service_tls_unix_socket", Param: "webServiceTlsUnixSocket", Type: framework.String, Key: "webServiceTlsUnixSocket",
 			Description: "The path of the Unix domain socket for `web_service_enable_tls_unix_socket`. The server needs write access to its directory."},
 		framework.Attr{Name: "web_service_enable_tls", Param: "webServiceEnableTls", Type: framework.Bool, Key: "webServiceEnableTls",
-			Description: "Serve the web console and HTTP API over HTTPS."},
+			Description: "Serve the web console and HTTP API over HTTPS. Needs `web_service_tls_certificate_path` or `web_service_use_self_signed_tls_certificate`, as the server turns TLS off without a certificate; the plan fails without either."},
 		framework.Attr{Name: "web_service_enable_http3", Param: "webServiceEnableHttp3", Type: framework.Bool, Key: "webServiceEnableHttp3",
 			Description: "Serve the web console and HTTP API over HTTP/3 as well."},
 		framework.Attr{Name: "web_service_http_to_tls_redirect", Param: "webServiceHttpToTlsRedirect", Type: framework.Bool, Key: "webServiceHttpToTlsRedirect",
 			Description: "Redirect HTTP requests to HTTPS."},
 		framework.Attr{Name: "web_service_tls_port", Param: "webServiceTlsPort", Type: framework.Int64, Key: "webServiceTlsPort",
-			Description: "The TCP port of the web console and HTTP API over HTTPS."},
+			Description: "The TCP port of the web console and HTTP API over HTTPS. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match if it uses HTTPS."},
 		framework.Attr{Name: "web_service_reverse_proxy_addresses", Param: "webServiceReverseProxyAddresses", Type: framework.List, Key: "webServiceReverseProxyAddresses",
 			Description: "The reverse proxies whose requests carry the client address in `web_service_real_ip_header`. Each entry is an IP address or network; prefix it with `!` to deny it. Entries are checked in order, and anything unmatched is denied."},
 		framework.Attr{Name: "web_service_use_self_signed_tls_certificate", Param: "webServiceUseSelfSignedTlsCertificate", Type: framework.Bool, Key: "webServiceUseSelfSignedTlsCertificate",
@@ -118,7 +126,7 @@ var settings = []framework.Spec{
 			Description: "The HTTP header that holds the client's IP address on requests from a reverse proxy in `web_service_reverse_proxy_addresses`."},
 		framework.Attr{Name: "web_service_csp_frame_ancestors_header", Param: "webServiceCspFrameAncestorsHeader", Type: framework.String, Key: "webServiceCspFrameAncestorsHeader",
 			Description: "The Content Security Policy frame-ancestors value sent with the web console."},
-	),
+	)),
 	settingsArea("optional_protocols", "Manages the optional DNS protocols: DNS-over-UDP/TCP PROXY, DNS-over-HTTP, DNS-over-TLS, DNS-over-HTTPS and DNS-over-QUIC (the Optional Protocols tab of the Settings page).",
 		framework.Attr{Name: "enable_edns_client_subnet_source_address", Param: "enableEDnsClientSubnetSourceAddress", Type: framework.Bool, Key: "enableEDnsClientSubnetSourceAddress",
 			Description: "Take the client's IP address from the EDNS Client Subnet option of DNS-over-UDP and DNS-over-TCP requests, so a DNS proxy can pass it on. The proxy must be allowed in `dns_reverse_proxy_network_acl`."},
@@ -388,4 +396,48 @@ func settingsArea(name, description string, attrs ...framework.Attr) framework.S
 		Update:      "/api/settings/set",
 		Attrs:       attrs,
 	}
+}
+
+func checked(check func(prior, plan map[string]tftypes.Value) error, s framework.Spec) framework.Spec {
+	s.Check = check
+	return s
+}
+
+// checkLocalEndPoints refuses what the server stores otherwise: an empty
+// list as its defaults, and port 0 or no port as 53.
+func checkLocalEndPoints(_, plan map[string]tftypes.Value) error {
+	v := plan["dns_server_local_end_points"]
+	var eps []tftypes.Value
+	if !v.IsKnown() || v.IsNull() || v.As(&eps) != nil {
+		return nil
+	}
+	if len(eps) == 0 {
+		return errors.New("dns_server_local_end_points: the server stores an empty list as 0.0.0.0:53 and [::]:53; list the end points instead")
+	}
+	for _, ep := range eps {
+		var s string
+		if !ep.IsKnown() || ep.As(&s) != nil {
+			continue
+		}
+		if _, port, err := net.SplitHostPort(s); err != nil || port == "0" {
+			return fmt.Errorf("dns_server_local_end_points: %q needs a port other than 0; the server stores it as port 53", s)
+		}
+	}
+	return nil
+}
+
+// checkWebServiceTLS refuses TLS without a certificate, which the server
+// turns off. An unknown path on create is one left unconfigured.
+func checkWebServiceTLS(prior, plan map[string]tftypes.Value) error {
+	var tls, selfSigned bool
+	if plan["web_service_enable_tls"].As(&tls) != nil || !tls || !plan["web_service_use_self_signed_tls_certificate"].IsKnown() ||
+		plan["web_service_use_self_signed_tls_certificate"].As(&selfSigned) != nil || selfSigned {
+		return nil
+	}
+	path := plan["web_service_tls_certificate_path"]
+	var p string
+	if !path.IsKnown() && prior != nil || path.IsKnown() && path.As(&p) == nil && p != "" {
+		return nil
+	}
+	return errors.New("web_service_enable_tls needs web_service_tls_certificate_path or web_service_use_self_signed_tls_certificate = true; without either the server turns TLS off")
 }

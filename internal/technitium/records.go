@@ -2,19 +2,20 @@ package technitium
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/ilijamt/terraform-provider-technitium/internal/framework"
 )
 
 var records = []framework.Spec{
-	framework.Record("A", addressData...),
-	framework.Record("AAAA", addressData...),
-	framework.Record("NS",
+	withSvcbHints(framework.Record("A", addressData...)),
+	withSvcbHints(framework.Record("AAAA", addressData...)),
+	withNote(withTTLDefault(framework.Record("NS",
 		framework.Attr{Name: "name_server", Param: "nameServer", Type: framework.String, Key: "rData.nameServer", Compare: framework.DomainName, Required: true, Identity: true,
 			Description: "The name server's domain name."},
 		framework.Attr{Name: "glue", Param: "glue", Type: framework.String,
 			Description: "The glue addresses of the name server, needed when it is inside the delegated domain. Separate several addresses with commas."},
-	),
+	), "the default NS record TTL"), "Creating a primary zone adds an apex `NS` record named after the server domain. Creating that same record is refused, so import it to manage it."),
 	framework.Record("CNAME",
 		framework.Attr{Name: "cname", Param: "cname", Type: framework.String, Key: "rData.cname", Compare: framework.DomainName, Required: true,
 			Description: "The canonical name `domain` points to."},
@@ -117,10 +118,10 @@ var records = []framework.Spec{
 		framework.Attr{Name: "value", Param: "value", Type: framework.String, Key: "rData.value", Compare: framework.Exact, Required: true, Identity: true,
 			Description: "The property value, for example the certificate authority's domain for `issue`."},
 	),
-	framework.Record("ANAME",
+	withNote(framework.Record("ANAME",
 		framework.Attr{Name: "aname", Param: "aname", Type: framework.String, Key: "rData.aname", Compare: framework.DomainName, Required: true, Identity: true,
 			Description: "The domain name whose addresses are returned for `domain`."},
-	),
+	), signedNote),
 	// The server keeps every FWD record at TTL 0.
 	withoutTTL(framework.Record("FWD",
 		framework.Attr{Name: "protocol", Param: "protocol", Type: framework.String, Key: "rData.protocol", Compare: framework.Exact, Identity: true, Enum: []string{"Udp", "Tcp", "Tls", "Https", "Quic"},
@@ -149,16 +150,35 @@ var records = []framework.Spec{
 			Description: "The class in the DNS app that handles the record."},
 		framework.Attr{Name: "record_data", Param: "recordData", Type: framework.String, Key: "rData.data", JSON: true,
 			Description: "The record data, in the format the DNS app expects."},
-	), "A name holds at most one `APP` record: the server refuses a second one, so use one resource per name."),
+	), "A name holds at most one `APP` record: the server refuses a second one, so use one resource per name. "+signedNote),
 }
+
+const signedNote = "A DNSSEC signed zone refuses this record type, and a zone that holds one cannot be signed."
 
 func withNote(s framework.Spec, note string) framework.Spec {
 	s.Description += " " + note
 	return s
 }
 
+// The server fills the auto hints of SVCB and HTTPS records from the
+// addresses again only when the address call asks it to.
+func withSvcbHints(s framework.Spec) framework.Spec {
+	s.Fixed["updateSvcbHints"] = "true"
+	return s
+}
+
+func withTTLDefault(s framework.Spec, def string) framework.Spec {
+	for i, a := range s.Attrs {
+		if a.Name == "ttl" {
+			s.Attrs[i].Description = strings.Replace(a.Description, "the default record TTL", def, 1)
+		}
+	}
+	return s
+}
+
 func withoutTTL(s framework.Spec) framework.Spec {
 	s.Attrs = slices.DeleteFunc(s.Attrs, func(a framework.Attr) bool { return a.Name == "ttl" })
+	s.Shared = ""
 	return s
 }
 

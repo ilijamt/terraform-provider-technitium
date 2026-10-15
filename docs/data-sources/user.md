@@ -27,7 +27,7 @@ output "admin_is_sso" {
 
 ### Required
 
-- `username` (String) The username, in lower case. Changing it replaces the user.
+- `username` (String) The username, in lower case. Changing it replaces the user. Deleting or replacing the user also deletes its sessions and API tokens, its rights in `technitium_permissions_*` and `technitium_zone_permissions`, and its group memberships: add `replace_triggered_by` on the `technitium_api_token`, `technitium_group_members` and permissions resources that name it to set them again in the same apply.
 
 ### Read-Only
 

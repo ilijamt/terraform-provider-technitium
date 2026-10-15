@@ -18,6 +18,10 @@ func TestRecordUpdateNotResent(t *testing.T) {
 	calls := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls[r.URL.Path]++
+		if r.URL.Path == "/api/zones/records/get" {
+			_, _ = w.Write([]byte(`{"status":"ok","response":{"records":[]}}`))
+			return
+		}
 		conn, _, err := w.(http.Hijacker).Hijack()
 		require.NoError(t, err)
 		_ = conn.Close()

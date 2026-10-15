@@ -23,6 +23,6 @@ Reads what `technitium_dhcp_reserved_lease` manages, without managing it, found 
 ### Read-Only
 
 - `comments` (String) Comments stored with the reservation.
-- `host_name` (String) The host name to give the device instead of the one it sends.
+- `host_name` (String) The host name to give the device instead of the one it sends. When the scope has `dns_updates`, adding the reservation sets the `A` record at this name in the scope's `domain_name` and the `PTR` record at the address's reverse name, replacing any others there, and creating their zones when missing. Removing the reservation deletes them. Create the zones before the scope, and don't manage other records at this name.
 - `id` (String) The identifier, as the resource has it.
 - `ip_address` (String) The address reserved for the device.
