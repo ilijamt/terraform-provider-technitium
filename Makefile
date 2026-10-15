@@ -23,13 +23,19 @@ build:
 test:
 	go test ./... -count=1 -cover
 
-# Runs the Terraform tests against a technitium/dns-server container matching
-# technitium.Version (needs Docker), or against TECHNITIUM_HOST when set.
+# Runs the acceptance tests with Terraform against a technitium/dns-server
+# container matching technitium.Version (needs Docker), or against
+# TECHNITIUM_TESTACC_HOST when set.
 .PHONY: testacc
 testacc:
 	@mkdir -p build
 	TF_ACC=1 go test ./... -count=1 -timeout 15m -coverpkg=./internal/... -coverprofile=build/coverage.out
 	go tool cover -func=build/coverage.out | tail -1
+
+# Runs the acceptance tests with OpenTofu instead of Terraform.
+.PHONY: testacc-tofu
+testacc-tofu:
+	TF_ACC_TERRAFORM_PATH="$$(command -v tofu)" $(MAKE) testacc
 
 # Removes acceptance test containers left behind by a killed or timed-out run.
 .PHONY: testacc-clean

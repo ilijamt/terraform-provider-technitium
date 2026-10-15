@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -46,6 +47,7 @@ type Client struct {
 	token     string
 	userAgent string
 	http      *http.Client
+	zones     sync.Map
 }
 
 func New(host, token, userAgent string, insecure bool, hc *http.Client) *Client {
@@ -87,7 +89,9 @@ func (c *Client) Login(ctx context.Context, username, password string) error {
 }
 
 // busy is the server's answer to a read while another request changes the
-// same data.
+// same data. A write can get it after part of it took effect, such as a
+// record deleted before the zone was unsigned under it, so writes are not
+// retried but serialized per zone instead.
 const busy = "Operation is not valid due to the current state of the object."
 
 // Call retries a busy read and any call made while the server restarts its
@@ -109,6 +113,11 @@ func Once(ctx context.Context) context.Context {
 func (c *Client) retry(ctx context.Context, path string, params url.Values, root bool) (map[string]any, error) {
 	read := strings.HasSuffix(path, "/get") || strings.HasSuffix(path, "/list")
 	creates := unrepeatable(path) || ctx.Value(onceKey{}) != nil
+	if zone := params.Get("zone"); zone != "" && !read {
+		mu, _ := c.zones.LoadOrStore(strings.ToLower(strings.TrimSuffix(zone, ".")), &sync.Mutex{})
+		mu.(*sync.Mutex).Lock()
+		defer mu.(*sync.Mutex).Unlock()
+	}
 	for attempt := 1; ; attempt++ {
 		resp, err := c.call(ctx, path, params, root)
 		var e *Error

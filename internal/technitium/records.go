@@ -164,11 +164,7 @@ func withoutTTL(s framework.Spec) framework.Spec {
 
 var addressData = []framework.Attr{
 	{Name: "ip_address", Param: "ipAddress", Type: framework.String, Key: "rData.ipAddress", Required: true, Identity: true, Compare: framework.IPAddress,
-		Description: "The IP address."},
-	{Name: "ptr", Param: "ptr", Type: framework.Bool, OnChange: true,
-		Description: "Also add a PTR record for the address in its reverse zone. On create, and when this changes to `true`, the server replaces every PTR record at the reverse name with it. Changing it to `false` leaves the PTR record in place; deleting the address record removes it."},
-	{Name: "create_ptr_zone", Param: "createPtrZone", Type: framework.Bool,
-		Description: "Create the reverse zone for the PTR record when it does not exist."},
+		Description: "The IP address. Manage its PTR record with `technitium_record_ptr`. Deleting this record, which includes replacing it, makes the server delete the PTR record at the address's reverse name that points at `domain`; add `replace_triggered_by` on the `technitium_record_ptr` to create it again in the same apply."},
 }
 
 var serviceBindingData = []framework.Attr{

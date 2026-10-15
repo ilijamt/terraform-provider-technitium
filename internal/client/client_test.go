@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,4 +161,52 @@ func TestRetryDroppedConnections(t *testing.T) {
 	_, err = c.Call(context.Background(), "/api/apps/downloadAndInstall", nil)
 	require.Error(t, err)
 	assert.Equal(t, 1, calls["/api/apps/downloadAndInstall"], "nor is an install")
+}
+
+func TestWritesSerializedPerZone(t *testing.T) {
+	var mu sync.Mutex
+	inFlight, most := map[string]int{}, map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		key := strings.TrimSuffix(strings.ToLower(r.PostForm.Get("zone")), ".")
+		if strings.HasSuffix(r.URL.Path, "/get") {
+			key += " read"
+		}
+		mu.Lock()
+		for _, k := range []string{key, ""} {
+			inFlight[k]++
+			most[k] = max(most[k], inFlight[k])
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight[key]--
+		inFlight[""]--
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"status":"ok","response":{}}`))
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "t0k", "test", false, nil)
+
+	var wg sync.WaitGroup
+	for _, call := range []struct{ path, zone string }{
+		{"/api/zones/dnssec/unsign", "a.com"},
+		{"/api/zones/records/delete", "a.com"},
+		{"/api/zones/records/delete", "A.com."},
+		{"/api/zones/records/add", "a.com"},
+		{"/api/zones/records/get", "a.com"},
+		{"/api/zones/records/get", "a.com"},
+		{"/api/zones/records/delete", "b.com"},
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := c.Call(context.Background(), call.path, url.Values{"zone": {call.zone}})
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, 1, most["a.com"], "writes to one zone wait for each other")
+	assert.Equal(t, 2, most["a.com read"], "reads do not")
+	assert.Greater(t, most[""], 2, "nor do writes to other zones")
 }

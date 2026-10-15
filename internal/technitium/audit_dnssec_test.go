@@ -118,3 +118,36 @@ resource "technitium_zone_dnssec" "test" {
 		},
 	})
 }
+
+// Terraform unsigns a zone and deletes its records at once, since each
+// depends only on the zone.
+func TestAccZoneDNSSECDestroyWithRecords(t *testing.T) {
+	var config string
+	for _, nx := range []string{"NSEC", "NSEC3"} {
+		name := strings.ToLower(nx)
+		config += fmt.Sprintf(`
+resource "technitium_zone" "%[1]s" {
+  zone = "%[1]s-destroy.test"
+}
+
+resource "technitium_zone_dnssec" "%[1]s" {
+  zone      = technitium_zone.%[1]s.zone
+  algorithm = "ECDSA"
+  curve     = "P256"
+  nx_proof  = "%[2]s"
+}
+
+resource "technitium_record_a" "%[1]s" {
+  count      = 12
+  zone       = technitium_zone.%[1]s.zone
+  domain     = "host${count.index}.%[1]s-destroy.test"
+  ip_address = "10.0.0.${count.index + 1}"
+}
+`, name, nx)
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             zonesDestroyed("nsec-destroy.test", "nsec3-destroy.test"),
+		Steps:                    []resource.TestStep{{Config: config}},
+	})
+}

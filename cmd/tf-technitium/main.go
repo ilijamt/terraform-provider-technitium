@@ -35,9 +35,10 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `Usage: tf-technitium [flags]
 
-Writes Terraform configuration for everything on a Technitium DNS Server,
-one file per group of resource types, imports.tf with import blocks that
-adopt the objects on the next apply, and variables.tf for secrets.
+Writes Terraform or OpenTofu configuration for everything on a Technitium
+DNS Server, one file per group of resource types, imports.tf with import
+blocks that adopt the objects on the next apply, and variables.tf for
+secrets.
 
 The token or password come from TECHNITIUM_TOKEN or TECHNITIUM_PASSWORD.
 

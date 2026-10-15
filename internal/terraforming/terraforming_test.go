@@ -242,6 +242,12 @@ func TestDeclaresProviders(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "versions.tf", name)
 
+	tofu := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tofu, "versions.tofu"), []byte("terraform {\n  required_providers {}\n}\n"), 0o644))
+	name, err = declaresProviders(tofu, out)
+	require.NoError(t, err)
+	assert.Equal(t, "versions.tofu", name, "OpenTofu reads .tofu files too")
+
 	name, err = declaresProviders(filepath.Join(dir, "missing"), out)
 	require.NoError(t, err)
 	assert.Empty(t, name, "no directory yet")

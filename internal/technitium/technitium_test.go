@@ -1,10 +1,12 @@
 package technitium_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"regexp"
 	"sort"
@@ -33,7 +35,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("TF_ACC") == "" {
 		os.Exit(m.Run())
 	}
-	ownServer = os.Getenv("TECHNITIUM_HOST") == ""
+	ownServer = os.Getenv("TECHNITIUM_TESTACC_HOST") == ""
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	host, stop, err := testserver.Start(ctx)
@@ -51,9 +53,22 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("TECHNITIUM_USERNAME", testserver.Username)
 	_ = os.Setenv("TECHNITIUM_PASSWORD", testserver.Password)
 	_ = os.Unsetenv("TECHNITIUM_TOKEN")
+	// OpenTofu resolves "ilijamt/technitium" to registry.opentofu.org and
+	// rejects the harness's default registry.terraform.io/-/technitium.
+	if os.Getenv("TF_ACC_PROVIDER_HOST") == "" && openTofu(os.Getenv("TF_ACC_TERRAFORM_PATH")) {
+		_ = os.Setenv("TF_ACC_PROVIDER_HOST", "registry.opentofu.org")
+	}
 	code := m.Run()
 	stop()
 	os.Exit(code)
+}
+
+func openTofu(path string) bool {
+	if path == "" {
+		return false
+	}
+	out, err := exec.Command(path, "version").Output()
+	return err == nil && bytes.HasPrefix(out, []byte("OpenTofu"))
 }
 
 var factories = map[string]func() (tfprotov6.ProviderServer, error){
@@ -634,7 +649,7 @@ resource "technitium_zone" "test" {
 func TestAccSecondaryZones(t *testing.T) {
 	acceptance(t)
 	if !ownServer {
-		t.Skip("needs the test server in Docker to reach a second server; TECHNITIUM_HOST is set")
+		t.Skip("needs the test server in Docker to reach a second server; TECHNITIUM_TESTACC_HOST is set")
 	}
 	host, ip, stop, err := testserver.Run(context.Background())
 	require.NoError(t, err)

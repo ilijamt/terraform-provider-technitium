@@ -20,10 +20,11 @@ const (
 	Label = "terraform-provider-technitium.testacc"
 )
 
-// Start uses the server at TECHNITIUM_HOST, which must accept Username and
-// Password, or else runs one in Docker.
+// Start uses the server at TECHNITIUM_TESTACC_HOST, which must accept
+// Username and Password, or else runs one in Docker. It never reads
+// TECHNITIUM_HOST, which may point at a real server the tests would change.
 func Start(ctx context.Context) (host string, stop func(), err error) {
-	if host = os.Getenv("TECHNITIUM_HOST"); host != "" {
+	if host = os.Getenv("TECHNITIUM_TESTACC_HOST"); host != "" {
 		return host, func() {}, nil
 	}
 	host, _, stop, err = Run(ctx)

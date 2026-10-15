@@ -2,7 +2,7 @@
 page_title: "Exporting an existing server"
 subcategory: ""
 description: |-
-  Write Terraform configuration and import blocks for everything on a Technitium server with tf-technitium.
+  Write Terraform or OpenTofu configuration and import blocks for everything on a Technitium server with tf-technitium.
 ---
 
 # Exporting an existing server
@@ -42,10 +42,10 @@ if any object couldn't be read.
 | `other.tf` | Anything else, such as API tokens. |
 | `imports.tf` | An `import` block per resource. |
 | `variables.tf` | Variables for the secrets the export doesn't write out. |
-| `technitium_versions.tf` | The provider source and `required_version = ">= 1.5"`. |
+| `technitium_versions.tf` | The provider source and `required_version = ">= 1.5"`. OpenTofu checks this against its own version, so 1.6 and later pass. |
 
-A module can only have one `required_providers` block. If a file of your own
-in the output directory already has one, `technitium_versions.tf` isn't
+A module can only have one `required_providers` block. If a `.tf` or `.tofu`
+file of your own in the output directory already has one, `technitium_versions.tf` isn't
 written, and a warning tells you to add
 `technitium = { source = "ilijamt/technitium" }` to yours.
 
@@ -73,4 +73,4 @@ shows no changes apart from secrets.
   `data "technitium_group"` blocks. SSO users belong to the SSO provider and
   are written as `data "technitium_user"` blocks.
 - Permissions are written in full, `user_permissions = []` included, so
-  Terraform owns each section's lists.
+  the configuration owns each section's lists.

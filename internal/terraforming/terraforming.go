@@ -222,7 +222,8 @@ func readAll(ctx context.Context, objects []object, read func(ctx context.Contex
 }
 
 // addVersions adds technitium_versions.tf unless the module already has
-// required_providers: Terraform allows only one such block per module.
+// required_providers: Terraform and OpenTofu allow only one such block per
+// module.
 func addVersions(dir string, out map[string]*hclwrite.File, warn func(string, ...any)) error {
 	name, err := declaresProviders(dir, out)
 	if err != nil {
@@ -245,7 +246,7 @@ func declaresProviders(dir string, out map[string]*hclwrite.File) (string, error
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !e.Type().IsRegular() || out[name] != nil || !strings.HasSuffix(name, ".tf") {
+		if !e.Type().IsRegular() || out[name] != nil || !strings.HasSuffix(name, ".tf") && !strings.HasSuffix(name, ".tofu") {
 			continue
 		}
 		src, err := os.ReadFile(filepath.Join(dir, name))

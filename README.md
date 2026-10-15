@@ -1,11 +1,11 @@
 Technitium Terraform Provider
 =============================
 
-A Terraform provider for [Technitium DNS Server](https://technitium.com/dns/),
-built on its
+A Terraform and OpenTofu provider for
+[Technitium DNS Server](https://technitium.com/dns/), built on its
 [HTTP API](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md).
-It supports Technitium 15.6.1 and Terraform 1.5 or later, tested with 1.5.7
-and 1.16.3.
+It supports Technitium 15.6.1, Terraform 1.5 or later (tested with 1.5.7 and
+1.16.3) and OpenTofu 1.6 or later (tested with 1.13.1).
 
 ```hcl
 terraform {
@@ -50,6 +50,14 @@ What it manages
   page, plus SSO and LDAP authentication. Each one manages only its own tab.
 
 Most resources have a data source that reads the object without managing it.
+
+OpenTofu
+--------
+
+OpenTofu resolves `source = "ilijamt/technitium"` to registry.opentofu.org, so
+`tofu init` can only install the provider once it is listed there. Listing it
+is a publishing step, separate from this code. Until then, use a local build
+with `dev_overrides`, as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Documentation
 -------------

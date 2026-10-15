@@ -31,16 +31,14 @@ resource "technitium_record_aaaa" "web" {
 ### Required
 
 - `domain` (String) The record's domain name, for example `www.example.com`. Use the zone name for a record at the zone apex.
-- `ip_address` (String) The IP address.
+- `ip_address` (String) The IP address. Manage its PTR record with `technitium_record_ptr`. Deleting this record, which includes replacing it, makes the server delete the PTR record at the address's reverse name that points at `domain`; add `replace_triggered_by` on the `technitium_record_ptr` to create it again in the same apply.
 - `zone` (String) The authoritative zone that holds the record.
 
 ### Optional
 
 - `comments` (String) Comments stored with the record.
-- `create_ptr_zone` (Boolean) Create the reverse zone for the PTR record when it does not exist.
 - `disable` (Boolean) Disable the record without deleting it. Defaults to `false`.
 - `expiry_ttl` (Number) Deletes the record automatically this many seconds after it was last modified. Terraform then creates it again on the next apply. Defaults to `0`, which keeps the record.
-- `ptr` (Boolean) Also add a PTR record for the address in its reverse zone. On create, and when this changes to `true`, the server replaces every PTR record at the reverse name with it. Changing it to `false` leaves the PTR record in place; deleting the address record removes it.
 - `ttl` (Number) The record TTL in seconds. Defaults to the default record TTL in the server settings.
 
 ### Read-Only

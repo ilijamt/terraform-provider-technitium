@@ -17,13 +17,28 @@ resource "technitium_zone" "a_home" {
   zone = "home.example.com"
 }
 
+resource "technitium_zone" "a_reverse" {
+  zone = "178.168.192.in-addr.arpa"
+}
+
 # ip_address cannot be "request-ip-address", which only the APP record type uses.
 resource "technitium_record_a" "nas" {
   zone       = technitium_zone.a_home.zone
   domain     = "nas.home.example.com"
   ip_address = "192.168.178.10"
   ttl        = 300
-  ptr        = true
+}
+
+# Deleting or replacing the A record makes the server delete its PTR, so the
+# PTR is replaced with it to write it again in the same apply.
+resource "technitium_record_ptr" "nas" {
+  zone     = technitium_zone.a_reverse.zone
+  domain   = "10.178.168.192.in-addr.arpa"
+  ptr_name = technitium_record_a.nas.domain
+
+  lifecycle {
+    replace_triggered_by = [technitium_record_a.nas]
+  }
 }
 ```
 
@@ -33,16 +48,14 @@ resource "technitium_record_a" "nas" {
 ### Required
 
 - `domain` (String) The record's domain name, for example `www.example.com`. Use the zone name for a record at the zone apex.
-- `ip_address` (String) The IP address.
+- `ip_address` (String) The IP address. Manage its PTR record with `technitium_record_ptr`. Deleting this record, which includes replacing it, makes the server delete the PTR record at the address's reverse name that points at `domain`; add `replace_triggered_by` on the `technitium_record_ptr` to create it again in the same apply.
 - `zone` (String) The authoritative zone that holds the record.
 
 ### Optional
 
 - `comments` (String) Comments stored with the record.
-- `create_ptr_zone` (Boolean) Create the reverse zone for the PTR record when it does not exist.
 - `disable` (Boolean) Disable the record without deleting it. Defaults to `false`.
 - `expiry_ttl` (Number) Deletes the record automatically this many seconds after it was last modified. Terraform then creates it again on the next apply. Defaults to `0`, which keeps the record.
-- `ptr` (Boolean) Also add a PTR record for the address in its reverse zone. On create, and when this changes to `true`, the server replaces every PTR record at the reverse name with it. Changing it to `false` leaves the PTR record in place; deleting the address record removes it.
 - `ttl` (Number) The record TTL in seconds. Defaults to the default record TTL in the server settings.
 
 ### Read-Only

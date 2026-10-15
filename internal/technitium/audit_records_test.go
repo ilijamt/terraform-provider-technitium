@@ -417,13 +417,13 @@ resource "technitium_record_a" "www" {
 				Config:           config("comments = \"web\""),
 				ConfigPlanChecks: expectUpdate("technitium_record_a.www"),
 			},
-			{ResourceName: "technitium_record_a.www", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"ptr", "create_ptr_zone"}},
+			{ResourceName: "technitium_record_a.www", ImportState: true, ImportStateVerify: true},
 		},
 	})
 }
 
-func TestAccAddressPTRKeepsOthers(t *testing.T) {
-	config := func(ttl int, ptr bool) string {
+func TestAccAddressWithExplicitPTR(t *testing.T) {
+	config := func(ip string, ttl int) string {
 		return fmt.Sprintf(`
 resource "technitium_zone" "test" {
   zone = "ptr.test"
@@ -436,19 +436,20 @@ resource "technitium_zone" "reverse" {
 resource "technitium_record_a" "www" {
   zone       = technitium_zone.test.zone
   domain     = "www.ptr.test"
-  ip_address = "198.51.100.7"
-  ptr        = %t
+  ip_address = %q
   ttl        = %d
-  depends_on = [technitium_zone.reverse]
 }
 
-resource "technitium_record_ptr" "other" {
-  zone       = technitium_zone.reverse.zone
-  domain     = "7.100.51.198.in-addr.arpa"
-  ptr_name   = "other.ptr.test"
-  depends_on = [technitium_record_a.www]
+resource "technitium_record_ptr" "www" {
+  zone     = technitium_zone.reverse.zone
+  domain   = "7.100.51.198.in-addr.arpa"
+  ptr_name = technitium_record_a.www.domain
+
+  lifecycle {
+    replace_triggered_by = [technitium_record_a.www]
+  }
 }
-`, ptr, ttl)
+`, ip, ttl)
 	}
 	ptrs := func(want int) resource.TestCheckFunc {
 		return func(*terraform.State) error {
@@ -462,9 +463,11 @@ resource "technitium_record_ptr" "other" {
 		ProtoV6ProviderFactories: factories,
 		CheckDestroy:             zonesDestroyed("ptr.test", "100.51.198.in-addr.arpa"),
 		Steps: []resource.TestStep{
-			{Config: config(300, true), Check: ptrs(2)},
-			{Config: config(600, true), ConfigPlanChecks: expectUpdate("technitium_record_a.www"), Check: ptrs(2)},
-			{Config: config(600, false), Check: ptrs(2)},
+			{Config: config("198.51.100.7", 300), Check: ptrs(1)},
+			{Config: config("198.51.100.7", 600), ConfigPlanChecks: expectUpdate("technitium_record_a.www"), Check: ptrs(1)},
+			// Replacing the A record deletes the PTR on the server; replace_triggered_by puts it back.
+			{Config: config("198.51.100.8", 600), Check: ptrs(1)},
+			{Config: config("198.51.100.8", 600), PlanOnly: true},
 		},
 	})
 }
