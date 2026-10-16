@@ -32,12 +32,15 @@ func Start(ctx context.Context) (host string, stop func(), err error) {
 }
 
 // Run also returns the container's IP on the Docker bridge network, where
-// other containers reach it.
-func Run(ctx context.Context) (host, ip string, stop func(), err error) {
-	out, err := exec.CommandContext(ctx, "docker", "run", "--detach", "--rm", "--label", Label,
-		"--publish", "127.0.0.1::5380",
-		"--env", "DNS_SERVER_ADMIN_PASSWORD="+Password,
-		"technitium/dns-server:"+technitium.Version).Output()
+// other containers reach it. Each of ports is also published on the same
+// port of 127.0.0.1, for a test that moves a service there.
+func Run(ctx context.Context, ports ...int) (host, ip string, stop func(), err error) {
+	args := []string{"run", "--detach", "--rm", "--label", Label, "--publish", "127.0.0.1::5380"}
+	for _, p := range ports {
+		args = append(args, "--publish", fmt.Sprintf("127.0.0.1:%d:%d", p, p))
+	}
+	args = append(args, "--env", "DNS_SERVER_ADMIN_PASSWORD="+Password, "technitium/dns-server:"+technitium.Version)
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
 		return "", "", nil, fmt.Errorf("docker run: %w", exitErr(err))
 	}

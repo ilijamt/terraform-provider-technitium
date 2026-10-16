@@ -3,12 +3,12 @@
 page_title: "technitium_settings_web_service Resource - technitium"
 subcategory: ""
 description: |-
-  Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call, and calls other resources make during the restart fail, so apply those changes on their own.
+  Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call; the provider holds its other calls until the service answers again, which adds a few seconds to the apply. A change that stops it answering at the provider host, such as a new address or port, still applies, but the later calls in the same apply fail with a message naming where it moved; make that change in an apply of its own, then set the provider host to match.
 ---
 
 # technitium_settings_web_service (Resource)
 
-Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call, and calls other resources make during the restart fail, so apply those changes on their own.
+Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call; the provider holds its other calls until the service answers again, which adds a few seconds to the apply. A change that stops it answering at the provider `host`, such as a new address or port, still applies, but the later calls in the same apply fail with a message naming where it moved; make that change in an apply of its own, then set the provider `host` to match.
 
 ## Example Usage
 
@@ -31,17 +31,17 @@ resource "technitium_settings_web_service" "this" {
 - `web_service_csp_frame_ancestors_header` (String) The Content Security Policy frame-ancestors value sent with the web console.
 - `web_service_enable_http3` (Boolean) Serve the web console and HTTP API over HTTP/3 as well.
 - `web_service_enable_http_unix_socket` (Boolean) Serve the web console and HTTP API over a Unix domain socket as well.
-- `web_service_enable_tls` (Boolean) Serve the web console and HTTP API over HTTPS. Needs `web_service_tls_certificate_path` or `web_service_use_self_signed_tls_certificate`, as the server turns TLS off without a certificate; the plan fails without either.
+- `web_service_enable_tls` (Boolean) Serve the web console and HTTP API over HTTPS. Needs `web_service_tls_certificate_path` or `web_service_use_self_signed_tls_certificate`, as the server turns TLS off without a certificate; the plan fails without either. Turning it off when the provider `host` uses HTTPS stops the service answering there, as a new port does.
 - `web_service_enable_tls_unix_socket` (Boolean) Serve the web console and HTTP API over HTTPS on a Unix domain socket as well.
-- `web_service_http_port` (Number) The TCP port of the web console and HTTP API. Technitium's default is `5380`. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match.
-- `web_service_http_to_tls_redirect` (Boolean) Redirect HTTP requests to HTTPS.
+- `web_service_http_port` (Number) The TCP port of the web console and HTTP API. Technitium's default is `5380`. Changing it restarts the web service about 2 seconds after the call. The change applies, but when the provider `host` uses HTTP, later calls in the same apply fail with a message naming the new address; change it in an apply of its own, then set the provider `host` to match.
+- `web_service_http_to_tls_redirect` (Boolean) Redirect HTTP requests to HTTPS. Needs `web_service_enable_tls`, as the server otherwise redirects to an HTTPS port nothing listens on; the plan fails without it. When the provider `host` uses HTTP, the change applies but later calls in the same apply fail with a message naming the HTTPS address; turn it on in an apply of its own, then set the provider `host` to that address.
 - `web_service_http_unix_socket` (String) The path of the Unix domain socket for `web_service_enable_http_unix_socket`. The server needs write access to its directory.
-- `web_service_local_addresses` (List of String) The local IP addresses the web console and HTTP API listen on. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match.
+- `web_service_local_addresses` (List of String) The local IP addresses the web console and HTTP API listen on. Changing it restarts the web service about 2 seconds after the call. A list without the address of the provider `host` (`0.0.0.0` and `::` cover every address) applies, but later calls in the same apply fail with a message saying where the service moved; change it in an apply of its own, then set the provider `host` to match.
 - `web_service_real_ip_header` (String) The HTTP header that holds the client's IP address on requests from a reverse proxy in `web_service_reverse_proxy_addresses`.
 - `web_service_reverse_proxy_addresses` (List of String) The reverse proxies whose requests carry the client address in `web_service_real_ip_header`. Each entry is an IP address or network; prefix it with `!` to deny it. Entries are checked in order, and anything unmatched is denied.
 - `web_service_tls_certificate_password` (String, Sensitive) The password of `web_service_tls_certificate_path`, if any.
 - `web_service_tls_certificate_path` (String) The path on the server of the PKCS #12 (.pfx) certificate, with its private key, for HTTPS.
-- `web_service_tls_port` (Number) The TCP port of the web console and HTTP API over HTTPS. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match if it uses HTTPS.
+- `web_service_tls_port` (Number) The TCP port of the web console and HTTP API over HTTPS. Changing it restarts the web service about 2 seconds after the call. The change applies, but when the provider `host` uses HTTPS, later calls in the same apply fail with a message naming the new address; change it in an apply of its own, then set the provider `host` to match.
 - `web_service_tls_unix_socket` (String) The path of the Unix domain socket for `web_service_enable_tls_unix_socket`. The server needs write access to its directory.
 - `web_service_use_self_signed_tls_certificate` (Boolean) Use a generated self-signed certificate for HTTPS when `web_service_tls_certificate_path` is not set.
 

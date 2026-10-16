@@ -3,12 +3,12 @@
 page_title: "technitium_settings_sso Resource - technitium"
 subcategory: ""
 description: |-
-  Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. The server restarts its web service when a change needs it. Destroying the resource leaves the configuration as it is.
+  Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. The server restarts its web service when a change needs it, and the provider holds its other calls until the service is back. Destroying the resource leaves the configuration as it is.
 ---
 
 # technitium_settings_sso (Resource)
 
-Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. The server restarts its web service when a change needs it. Destroying the resource leaves the configuration as it is.
+Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. The server restarts its web service when a change needs it, and the provider holds its other calls until the service is back. Destroying the resource leaves the configuration as it is.
 
 ## Example Usage
 

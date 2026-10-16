@@ -21,6 +21,12 @@ removes the containers it left behind.
 points at OpenTofu, the tests set `TF_ACC_PROVIDER_HOST` to
 `registry.opentofu.org`, because OpenTofu resolves `ilijamt/technitium` there.
 
+To test another version, point `TF_ACC_TERRAFORM_PATH` at its binary, for
+example `TF_ACC_TERRAFORM_PATH=/path/to/terraform-1.5.7 make testacc`. Run
+the oldest supported versions (Terraform 1.5, OpenTofu 1.6) and the newest
+before a release. Tests that need a newer version call `skipBelow` and skip
+with the reason.
+
 Run `make generate` and commit `docs/` after changing a schema, an example
 or a template.
 

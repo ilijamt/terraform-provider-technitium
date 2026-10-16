@@ -44,10 +44,13 @@ if any object couldn't be read.
 | `variables.tf` | Variables for the secrets the export doesn't write out. |
 | `technitium_versions.tf` | The provider source and `required_version = ">= 1.5"`. OpenTofu checks this against its own version, so 1.6 and later pass. |
 
-A module can only have one `required_providers` block. If a `.tf` or `.tofu`
-file of your own in the output directory already has one, `technitium_versions.tf` isn't
-written, and a warning tells you to add
-`technitium = { source = "ilijamt/technitium" }` to yours.
+A module can only have one `required_providers` block. If a `.tf`, `.tofu`,
+`.tf.json` or `.tofu.json` file of your own in the output directory already has one,
+`technitium_versions.tf` isn't written, and a warning tells you to add
+`technitium = { source = "ilijamt/technitium" }` to yours. A
+`technitium_versions.tf` left from an earlier export would then repeat the block.
+With `-force` the export removes it, even with `-type` or `-zone`. Without
+`-force` the export stops with an error and writes nothing.
 
 Resources refer to each other, as in
 `zone = technitium_zone.home_example_com.zone`, instead of repeating names.
@@ -62,6 +65,10 @@ shows no changes apart from secrets.
   secret become sensitive variables. The server never returns some of them,
   user passwords among them, so the first apply sets them from your
   variables.
+- Terraform before 1.8 and OpenTofu 1.6 also plan an update to
+  `technitium_settings_tsig` with no changed values. They count a sensitive
+  variable inside a sensitive attribute as a change. The apply writes the
+  same keys back.
 - Apps are exported without `url`, because the server doesn't say where an app
   came from. Add a `url` later to update the app from it.
 - An `app_config` is written out in full. When its keys or values look like

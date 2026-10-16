@@ -70,17 +70,6 @@ resource "technitium_app" "x" {
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("technitium_app.x", plancheck.ResourceActionNoop)}},
 				Check:            installed,
 			},
-			{
-				// Dropped from state so the cleanup, not a destroy, uninstalls it.
-				Config: `
-removed {
-  from = technitium_app.x
-  lifecycle {
-    destroy = false
-  }
-}
-`,
-			},
 		},
 	})
 }

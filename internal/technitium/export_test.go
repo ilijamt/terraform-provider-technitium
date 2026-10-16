@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 
 func TestAccExport(t *testing.T) {
 	acceptance(t)
+	skipBelow(t, "1.7.0", "1.10.0", "the removed block with lifecycle { destroy = false } that keeps the admin user")
 	resetSSO(t)
 	resetLDAP(t)
 	c := api(t)
@@ -223,6 +225,9 @@ func (onlyImports) CheckPlan(_ context.Context, req plancheck.CheckPlanRequest, 
 		}
 		switch {
 		case rc.Change.Actions.NoOp():
+		// Terraform 1.7 and older plan an update that changes only which values are
+		// sensitive, when a sensitive variable sets a nested sensitive value.
+		case rc.Change.Actions.Update() && reflect.DeepEqual(rc.Change.Before, rc.Change.After):
 		case rc.Change.Actions.Update() && (rc.Type == "technitium_user" || rc.Type == "technitium_settings_sso" || rc.Type == "technitium_settings_ldap" || rc.Type == "technitium_app"):
 		default:
 			resp.Error = fmt.Errorf("%s: unexpected %v", rc.Address, rc.Change.Actions)

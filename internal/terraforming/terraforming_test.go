@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -259,13 +260,13 @@ func TestAddVersions(t *testing.T) {
 
 	dir := t.TempDir()
 	out := map[string]*hclwrite.File{}
-	require.NoError(t, addVersions(dir, out, warn))
+	require.NoError(t, addVersions(dir, out, false, io.Discard, warn))
 	assert.Contains(t, out, "technitium_versions.tf")
 	assert.Empty(t, warnings)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "versions.tf"), []byte("terraform {\n  required_providers {}\n}\n"), 0o644))
 	out = map[string]*hclwrite.File{}
-	require.NoError(t, addVersions(dir, out, warn))
+	require.NoError(t, addVersions(dir, out, false, io.Discard, warn))
 	assert.NotContains(t, out, "technitium_versions.tf", "a module has one required_providers")
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "versions.tf")

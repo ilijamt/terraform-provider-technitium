@@ -150,6 +150,9 @@ type Attr struct {
 	// OnChange sends the value in an update only when it differs from the
 	// prior state, for values the server never returns and an update replaces.
 	OnChange bool
+	// Restarts is for a value whose change makes the server restart its web
+	// service a moment after the call returns.
+	Restarts bool
 }
 
 // A read-only value changes on the server's account, never by replacing.

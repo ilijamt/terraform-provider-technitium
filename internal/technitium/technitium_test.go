@@ -3,6 +3,7 @@ package technitium_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -69,6 +71,33 @@ func openTofu(path string) bool {
 	}
 	out, err := exec.Command(path, "version").Output()
 	return err == nil && bytes.HasPrefix(out, []byte("OpenTofu"))
+}
+
+// skipBelow skips a test that needs a newer Terraform or OpenTofu than the
+// binary the harness runs.
+func skipBelow(t *testing.T, terraform, tofu, why string) {
+	path := os.Getenv("TF_ACC_TERRAFORM_PATH")
+	if path == "" {
+		var err error
+		if path, err = exec.LookPath("terraform"); err != nil {
+			return
+		}
+	}
+	out, err := exec.Command(path, "version", "-json").Output()
+	require.NoError(t, err)
+	var v struct {
+		Version string `json:"terraform_version"`
+	}
+	require.NoError(t, json.Unmarshal(out, &v))
+	have, err := version.NewVersion(v.Version)
+	require.NoError(t, err)
+	name, minimum := "Terraform", terraform
+	if openTofu(path) {
+		name, minimum = "OpenTofu", tofu
+	}
+	if have.LessThan(version.Must(version.NewVersion(minimum))) {
+		t.Skipf("needs %s %s or later for %s, have %s", name, minimum, why, have)
+	}
 }
 
 var factories = map[string]func() (tfprotov6.ProviderServer, error){

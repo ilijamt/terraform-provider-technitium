@@ -12,6 +12,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -224,6 +225,9 @@ func (r *Resource) Create(ctx context.Context, req resource.CreateRequest, resp 
 	// The object exists now, so later failures still save state and
 	// Terraform taints it instead of losing track of it.
 	state, err := r.read(ctx, plan)
+	if client.IsMoved(err) {
+		state, err = r.unread(plan, err, &resp.Diagnostics, "Create"), nil
+	}
 	if state != nil && r.spec.Create != "" && r.hasUpdateOnly(plan) {
 		if err = r.update(ctx, state, plan); err == nil {
 			state, err = r.read(ctx, plan)
@@ -272,6 +276,9 @@ func (r *Resource) Update(ctx context.Context, req resource.UpdateRequest, resp 
 	}
 	if err == nil {
 		state, err = r.read(ctx, plan)
+		if client.IsMoved(err) {
+			state, err = r.unread(plan, err, &resp.Diagnostics, "Update"), nil
+		}
 		if err == nil && state == nil {
 			err = fmt.Errorf("%s disappeared during update", r.spec.Name)
 		}
@@ -284,6 +291,13 @@ func (r *Resource) Update(ctx context.Context, req resource.UpdateRequest, resp 
 	if err != nil {
 		resp.Diagnostics.AddError("Update "+r.spec.Name, err.Error())
 	}
+}
+
+// unread is the state of a change the server took that cannot be read back,
+// as it moved the web service away from the provider's host.
+func (r *Resource) unread(plan map[string]tftypes.Value, err error, diags *diag.Diagnostics, op string) map[string]tftypes.Value {
+	diags.AddWarning(op+" "+r.spec.Name, "Saved as planned without reading it back: "+err.Error())
+	return r.complete(plan)
 }
 
 func (r *Resource) ModifyPlan(_ context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
@@ -458,7 +472,11 @@ func (r *Resource) create(ctx context.Context, plan map[string]tftypes.Value) er
 			}
 		}
 	}
-	resp, err := r.client.Call(ctx, endpoint, params)
+	cctx := ctx
+	if endpoint == r.spec.Update && r.restarts(ctx, plan) {
+		cctx = client.Restarts(ctx)
+	}
+	resp, err := r.client.Call(cctx, endpoint, params)
 	// A create cut off mid-way may still have happened; the object then
 	// exists. Not when create returns values only its response holds.
 	if client.IsDropped(err) && r.spec.Created == nil {
@@ -527,6 +545,7 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 	}
 	// A conversion resets every value, so all known ones are sent again.
 	changed := len(converts) > 0
+	restarts := false
 	for _, a := range r.spec.Attrs {
 		if !a.Update || a.Identity || a.Toggle != nil {
 			continue
@@ -540,6 +559,7 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 		}
 		differs := !v.Equal(prior[a.Name])
 		changed = changed || differs
+		restarts = restarts || a.Restarts && differs
 		if a.OnChange && !differs {
 			continue
 		}
@@ -554,6 +574,9 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 		if r.spec.UpdateOnce {
 			uctx = client.Once(ctx)
 		}
+		if restarts {
+			uctx = client.Restarts(uctx)
+		}
 		if _, err = r.client.Call(uctx, r.spec.Update, params); err != nil {
 			return err
 		}
@@ -562,6 +585,31 @@ func (r *Resource) update(ctx context.Context, prior, plan map[string]tftypes.Va
 		}
 	}
 	return r.toggle(ctx, prior, plan)
+}
+
+// restarts tells whether creating with the update call changes a Restarts
+// value on the server. One the server never returns, or one it cannot be
+// compared with, counts as changed.
+func (r *Resource) restarts(ctx context.Context, plan map[string]tftypes.Value) bool {
+	var current map[string]tftypes.Value
+	for _, a := range r.spec.Attrs {
+		if !a.Restarts || !set(plan[a.Name]) {
+			continue
+		}
+		if a.Key == "" {
+			return true
+		}
+		if current == nil {
+			var err error
+			if current, err = r.read(ctx, plan); err != nil || current == nil {
+				return true
+			}
+		}
+		if !a.matches(plan[a.Name], current[a.Name]) {
+			return true
+		}
+	}
+	return false
 }
 
 // share checks the Shared value of plan against the other List items, and

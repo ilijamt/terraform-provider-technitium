@@ -30,12 +30,13 @@ type mockAPI struct {
 }
 
 type call struct {
-	path   string
-	params url.Values
+	path     string
+	params   url.Values
+	restarts bool
 }
 
-func (m *mockAPI) Call(_ context.Context, path string, params url.Values) (map[string]any, error) {
-	m.calls = append(m.calls, call{path, params})
+func (m *mockAPI) Call(ctx context.Context, path string, params url.Values) (map[string]any, error) {
+	m.calls = append(m.calls, call{path, params, client.IsRestart(ctx)})
 	if m.respond == nil {
 		return map[string]any{}, nil
 	}

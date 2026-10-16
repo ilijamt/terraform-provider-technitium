@@ -49,8 +49,9 @@ signs:
   - "--detach-sign"
   - "${artifact}"
 release:
-  # Published by the release workflow only after every asset is uploaded, so the
-  # Terraform Registry sees a complete release on its single webhook scan.
+  # The draft is published only after every asset is uploaded, so the Terraform
+  # Registry sees a complete release on its single webhook scan. The release
+  # workflow does this; by hand it is gh release edit <tag> --draft=false.
   draft: true
   # A failed run leaves the draft behind; let a re-run of the same tag reclaim it.
   replace_existing_draft: true

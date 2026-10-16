@@ -93,32 +93,32 @@ var settings = []framework.Spec{
 		framework.Attr{Name: "max_concurrent_resolutions_per_core", Param: "maxConcurrentResolutionsPerCore", Type: framework.Int64, Key: "maxConcurrentResolutionsPerCore",
 			Description: "The most concurrent outbound resolutions per CPU core. Technitium's default is `100`."},
 	)),
-	checked(checkWebServiceTLS, settingsArea("web_service", "Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call, and calls other resources make during the restart fail, so apply those changes on their own.",
-		framework.Attr{Name: "web_service_local_addresses", Param: "webServiceLocalAddresses", Type: framework.List, Key: "webServiceLocalAddresses",
-			Description: "The local IP addresses the web console and HTTP API listen on. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match."},
-		framework.Attr{Name: "web_service_http_port", Param: "webServiceHttpPort", Type: framework.Int64, Key: "webServiceHttpPort",
-			Description: "The TCP port of the web console and HTTP API. Technitium's default is `5380`. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match."},
-		framework.Attr{Name: "web_service_enable_http_unix_socket", Param: "webServiceEnableHttpUnixSocket", Type: framework.Bool, Key: "webServiceEnableHttpUnixSocket",
+	checked(checkWebService, settingsArea("web_service", "Manages the web service that serves the console and the HTTP API (the Web Service tab of the Settings page). Changing the addresses, ports, TLS, HTTP/3, the HTTPS redirect or the Unix sockets restarts the web service about 2 seconds after the call; the provider holds its other calls until the service answers again, which adds a few seconds to the apply. A change that stops it answering at the provider `host`, such as a new address or port, still applies, but the later calls in the same apply fail with a message naming where it moved; make that change in an apply of its own, then set the provider `host` to match.",
+		framework.Attr{Name: "web_service_local_addresses", Param: "webServiceLocalAddresses", Type: framework.List, Restarts: true, Key: "webServiceLocalAddresses",
+			Description: "The local IP addresses the web console and HTTP API listen on. Changing it restarts the web service about 2 seconds after the call. A list without the address of the provider `host` (`0.0.0.0` and `::` cover every address) applies, but later calls in the same apply fail with a message saying where the service moved; change it in an apply of its own, then set the provider `host` to match."},
+		framework.Attr{Name: "web_service_http_port", Param: "webServiceHttpPort", Type: framework.Int64, Restarts: true, Key: "webServiceHttpPort",
+			Description: "The TCP port of the web console and HTTP API. Technitium's default is `5380`. Changing it restarts the web service about 2 seconds after the call. The change applies, but when the provider `host` uses HTTP, later calls in the same apply fail with a message naming the new address; change it in an apply of its own, then set the provider `host` to match."},
+		framework.Attr{Name: "web_service_enable_http_unix_socket", Param: "webServiceEnableHttpUnixSocket", Type: framework.Bool, Restarts: true, Key: "webServiceEnableHttpUnixSocket",
 			Description: "Serve the web console and HTTP API over a Unix domain socket as well."},
-		framework.Attr{Name: "web_service_http_unix_socket", Param: "webServiceHttpUnixSocket", Type: framework.String, Key: "webServiceHttpUnixSocket",
+		framework.Attr{Name: "web_service_http_unix_socket", Param: "webServiceHttpUnixSocket", Type: framework.String, Restarts: true, Key: "webServiceHttpUnixSocket",
 			Description: "The path of the Unix domain socket for `web_service_enable_http_unix_socket`. The server needs write access to its directory."},
-		framework.Attr{Name: "web_service_enable_tls_unix_socket", Param: "webServiceEnableTlsUnixSocket", Type: framework.Bool, Key: "webServiceEnableTlsUnixSocket",
+		framework.Attr{Name: "web_service_enable_tls_unix_socket", Param: "webServiceEnableTlsUnixSocket", Type: framework.Bool, Restarts: true, Key: "webServiceEnableTlsUnixSocket",
 			Description: "Serve the web console and HTTP API over HTTPS on a Unix domain socket as well."},
-		framework.Attr{Name: "web_service_tls_unix_socket", Param: "webServiceTlsUnixSocket", Type: framework.String, Key: "webServiceTlsUnixSocket",
+		framework.Attr{Name: "web_service_tls_unix_socket", Param: "webServiceTlsUnixSocket", Type: framework.String, Restarts: true, Key: "webServiceTlsUnixSocket",
 			Description: "The path of the Unix domain socket for `web_service_enable_tls_unix_socket`. The server needs write access to its directory."},
-		framework.Attr{Name: "web_service_enable_tls", Param: "webServiceEnableTls", Type: framework.Bool, Key: "webServiceEnableTls",
-			Description: "Serve the web console and HTTP API over HTTPS. Needs `web_service_tls_certificate_path` or `web_service_use_self_signed_tls_certificate`, as the server turns TLS off without a certificate; the plan fails without either."},
-		framework.Attr{Name: "web_service_enable_http3", Param: "webServiceEnableHttp3", Type: framework.Bool, Key: "webServiceEnableHttp3",
+		framework.Attr{Name: "web_service_enable_tls", Param: "webServiceEnableTls", Type: framework.Bool, Restarts: true, Key: "webServiceEnableTls",
+			Description: "Serve the web console and HTTP API over HTTPS. Needs `web_service_tls_certificate_path` or `web_service_use_self_signed_tls_certificate`, as the server turns TLS off without a certificate; the plan fails without either. Turning it off when the provider `host` uses HTTPS stops the service answering there, as a new port does."},
+		framework.Attr{Name: "web_service_enable_http3", Param: "webServiceEnableHttp3", Type: framework.Bool, Restarts: true, Key: "webServiceEnableHttp3",
 			Description: "Serve the web console and HTTP API over HTTP/3 as well."},
-		framework.Attr{Name: "web_service_http_to_tls_redirect", Param: "webServiceHttpToTlsRedirect", Type: framework.Bool, Key: "webServiceHttpToTlsRedirect",
-			Description: "Redirect HTTP requests to HTTPS."},
-		framework.Attr{Name: "web_service_tls_port", Param: "webServiceTlsPort", Type: framework.Int64, Key: "webServiceTlsPort",
-			Description: "The TCP port of the web console and HTTP API over HTTPS. Changing it restarts the web service about 2 seconds after the call, so later calls in the same apply fail. Change it in an apply of its own, then change the provider `host` to match if it uses HTTPS."},
+		framework.Attr{Name: "web_service_http_to_tls_redirect", Param: "webServiceHttpToTlsRedirect", Type: framework.Bool, Restarts: true, Key: "webServiceHttpToTlsRedirect",
+			Description: "Redirect HTTP requests to HTTPS. Needs `web_service_enable_tls`, as the server otherwise redirects to an HTTPS port nothing listens on; the plan fails without it. When the provider `host` uses HTTP, the change applies but later calls in the same apply fail with a message naming the HTTPS address; turn it on in an apply of its own, then set the provider `host` to that address."},
+		framework.Attr{Name: "web_service_tls_port", Param: "webServiceTlsPort", Type: framework.Int64, Restarts: true, Key: "webServiceTlsPort",
+			Description: "The TCP port of the web console and HTTP API over HTTPS. Changing it restarts the web service about 2 seconds after the call. The change applies, but when the provider `host` uses HTTPS, later calls in the same apply fail with a message naming the new address; change it in an apply of its own, then set the provider `host` to match."},
 		framework.Attr{Name: "web_service_reverse_proxy_addresses", Param: "webServiceReverseProxyAddresses", Type: framework.List, Key: "webServiceReverseProxyAddresses",
 			Description: "The reverse proxies whose requests carry the client address in `web_service_real_ip_header`. Each entry is an IP address or network; prefix it with `!` to deny it. Entries are checked in order, and anything unmatched is denied."},
-		framework.Attr{Name: "web_service_use_self_signed_tls_certificate", Param: "webServiceUseSelfSignedTlsCertificate", Type: framework.Bool, Key: "webServiceUseSelfSignedTlsCertificate",
+		framework.Attr{Name: "web_service_use_self_signed_tls_certificate", Param: "webServiceUseSelfSignedTlsCertificate", Type: framework.Bool, Restarts: true, Key: "webServiceUseSelfSignedTlsCertificate",
 			Description: "Use a generated self-signed certificate for HTTPS when `web_service_tls_certificate_path` is not set."},
-		framework.Attr{Name: "web_service_tls_certificate_path", Param: "webServiceTlsCertificatePath", Type: framework.String, Key: "webServiceTlsCertificatePath",
+		framework.Attr{Name: "web_service_tls_certificate_path", Param: "webServiceTlsCertificatePath", Type: framework.String, Restarts: true, Key: "webServiceTlsCertificatePath",
 			Description: "The path on the server of the PKCS #12 (.pfx) certificate, with its private key, for HTTPS."},
 		framework.Attr{Name: "web_service_tls_certificate_password", Param: "webServiceTlsCertificatePassword", Type: framework.String, Sensitive: true,
 			Description: "The password of `web_service_tls_certificate_path`, if any."},
@@ -306,21 +306,21 @@ var settings = []framework.Spec{
 var settingsSSO = framework.Spec{
 	Name: "settings_sso",
 	Description: "Manages single sign-on with OpenID Connect: the provider, sign-up rules and how the provider's groups map to local groups. " +
-		"The server restarts its web service when a change needs it. Destroying the resource leaves the configuration as it is.",
+		"The server restarts its web service when a change needs it, and the provider holds its other calls until the service is back. Destroying the resource leaves the configuration as it is.",
 	Read:   "/api/admin/sso/get",
 	Update: "/api/admin/sso/set",
 	Attrs: []framework.Attr{
-		{Name: "enabled", Param: "ssoEnabled", Type: framework.Bool, Key: "ssoEnabled", Update: true,
+		{Name: "enabled", Param: "ssoEnabled", Type: framework.Bool, Restarts: true, Key: "ssoEnabled", Update: true,
 			Description: "Allow signing in with single sign-on."},
-		{Name: "authority", Param: "ssoAuthority", Type: framework.String, Key: "ssoAuthority", Update: true,
+		{Name: "authority", Param: "ssoAuthority", Type: framework.String, Restarts: true, Key: "ssoAuthority", Update: true,
 			Description: "The OpenID Connect authority URL of the provider."},
-		{Name: "client_id", Param: "ssoClientId", Type: framework.String, Key: "ssoClientId", Update: true,
+		{Name: "client_id", Param: "ssoClientId", Type: framework.String, Restarts: true, Key: "ssoClientId", Update: true,
 			Description: "The OpenID Connect client ID."},
-		{Name: "client_secret", Param: "ssoClientSecret", Type: framework.String, Sensitive: true, Update: true,
+		{Name: "client_secret", Param: "ssoClientSecret", Type: framework.String, Restarts: true, Sensitive: true, Update: true,
 			Description: "The OpenID Connect client secret. The server never returns it, so a secret changed outside Terraform is not detected."},
-		{Name: "metadata_address", Param: "ssoMetadataAddress", Type: framework.String, Key: "ssoMetadataAddress", Update: true,
+		{Name: "metadata_address", Param: "ssoMetadataAddress", Type: framework.String, Restarts: true, Key: "ssoMetadataAddress", Update: true,
 			Description: "The OpenID Connect discovery URL, when the provider does not use the default one."},
-		{Name: "scopes", Param: "ssoScopes", Type: framework.List, Key: "ssoScopes", Update: true, Separator: "|",
+		{Name: "scopes", Param: "ssoScopes", Type: framework.List, Restarts: true, Key: "ssoScopes", Update: true, Separator: "|",
 			Description: "The OpenID Connect scopes to request. Technitium's default is `openid`, `profile` and `email`."},
 		{Name: "allow_signup", Param: "ssoAllowSignup", Type: framework.Bool, Key: "ssoAllowSignup", Update: true,
 			Description: "Create an account for a new user the first time they sign in with single sign-on."},
@@ -440,4 +440,18 @@ func checkWebServiceTLS(prior, plan map[string]tftypes.Value) error {
 		return nil
 	}
 	return errors.New("web_service_enable_tls needs web_service_tls_certificate_path or web_service_use_self_signed_tls_certificate = true; without either the server turns TLS off")
+}
+
+// checkWebService adds to checkWebServiceTLS a refusal of the HTTPS redirect
+// without TLS, which sends every request to an HTTPS port nothing listens on.
+func checkWebService(prior, plan map[string]tftypes.Value) error {
+	if err := checkWebServiceTLS(prior, plan); err != nil {
+		return err
+	}
+	var redirect, tls bool
+	if plan["web_service_http_to_tls_redirect"].As(&redirect) != nil || !redirect ||
+		plan["web_service_enable_tls"].As(&tls) != nil || tls {
+		return nil
+	}
+	return errors.New("web_service_http_to_tls_redirect needs web_service_enable_tls = true; without TLS the server redirects every request to an HTTPS port that does not answer, cutting off the console and the provider")
 }

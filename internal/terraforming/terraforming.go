@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
+	hcljson "github.com/hashicorp/hcl/v2/json"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zclconf/go-cty/cty"
 
@@ -191,7 +192,7 @@ func Run(ctx context.Context, o Options) error {
 	if len(out) == 0 {
 		return errors.New("nothing to export")
 	}
-	if err := addVersions(o.Out, out, warn); err != nil {
+	if err := addVersions(o.Out, out, o.Force, o.Log, warn); err != nil {
 		return err
 	}
 	return write(o.Out, out, o.Force, prune, o.Log)
@@ -223,17 +224,32 @@ func readAll(ctx context.Context, objects []object, read func(ctx context.Contex
 
 // addVersions adds technitium_versions.tf unless the module already has
 // required_providers: Terraform and OpenTofu allow only one such block per
-// module.
-func addVersions(dir string, out map[string]*hclwrite.File, warn func(string, ...any)) error {
+// module. A technitium_versions.tf an earlier export wrote is then removed
+// with force, as any other file this export would overwrite.
+func addVersions(dir string, out map[string]*hclwrite.File, force bool, log io.Writer, warn func(string, ...any)) error {
 	name, err := declaresProviders(dir, out)
 	if err != nil {
 		return err
 	}
-	if name != "" {
-		warn("%s already has required_providers, so technitium_versions.tf is not written; add technitium = { source = \"ilijamt/technitium\" } there", filepath.Join(dir, name))
+	if name == "" {
+		out["technitium_versions.tf"] = versions()
 		return nil
 	}
-	out["technitium_versions.tf"] = versions()
+	warn("%s already has required_providers, so technitium_versions.tf is not written; add technitium = { source = \"ilijamt/technitium\" } there", filepath.Join(dir, name))
+	path := filepath.Join(dir, "technitium_versions.tf")
+	ok, err := generated(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist) || err == nil && !ok:
+		return nil
+	case err != nil:
+		return err
+	case !force:
+		return fmt.Errorf("%s from an earlier export repeats the required_providers in %s, use -force to remove it", path, name)
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	fmt.Fprintf(log, "removed %s\n", path)
 	return nil
 }
 
@@ -246,7 +262,9 @@ func declaresProviders(dir string, out map[string]*hclwrite.File) (string, error
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !e.Type().IsRegular() || out[name] != nil || !strings.HasSuffix(name, ".tf") && !strings.HasSuffix(name, ".tofu") {
+		if !e.Type().IsRegular() || out[name] != nil || !slices.ContainsFunc([]string{".tf", ".tofu", ".tf.json", ".tofu.json"}, func(ext string) bool {
+			return strings.HasSuffix(name, ext)
+		}) {
 			continue
 		}
 		src, err := os.ReadFile(filepath.Join(dir, name))
@@ -257,19 +275,19 @@ func declaresProviders(dir string, out map[string]*hclwrite.File) (string, error
 			continue
 		}
 		// A file with errors still yields the blocks that parsed.
-		f, _ := hclsyntax.ParseConfig(src, name, hcl.InitialPos)
-		body, ok := f.Body.(*hclsyntax.Body)
-		if !ok {
+		var f *hcl.File
+		if strings.HasSuffix(name, ".json") {
+			f, _ = hcljson.Parse(src, name)
+		} else {
+			f, _ = hclsyntax.ParseConfig(src, name, hcl.InitialPos)
+		}
+		if f == nil || f.Body == nil {
 			continue
 		}
-		for _, b := range body.Blocks {
-			if b.Type != "terraform" {
-				continue
-			}
-			for _, inner := range b.Body.Blocks {
-				if inner.Type == "required_providers" {
-					return name, nil
-				}
+		tf, _, _ := f.Body.PartialContent(&hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "terraform"}}})
+		for _, b := range tf.Blocks {
+			if inner, _, _ := b.Body.PartialContent(&hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{{Type: "required_providers"}}}); len(inner.Blocks) > 0 {
+				return name, nil
 			}
 		}
 	}
