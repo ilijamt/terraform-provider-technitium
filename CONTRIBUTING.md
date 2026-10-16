@@ -2,30 +2,30 @@ Development
 ===========
 
 ```shell
-make build        # ./build/terraform-provider-technitium and ./build/tf-technitium
-make generate     # render docs/ from the schemas, examples/ and templates/
-make test         # unit tests
-make testacc      # acceptance tests with Terraform, in a technitium/dns-server container
-make testacc-tofu # the same with OpenTofu
-make lint         # gofmt, terraform fmt, go vet and golangci-lint
+make build            # ./build/terraform-provider-technitium and ./build/tf-technitium
+make generate         # render docs/ from the schemas, examples/ and templates/
+make test             # unit tests, no Docker
+make test-integration # tests/examples in a container; TF=tofu for OpenTofu
+make lint             # gofmt, terraform fmt, go vet and golangci-lint
 ```
 
-`make testacc` needs Docker. It starts the image named by
-`technitium.Version`, or uses the server at `TECHNITIUM_TESTACC_HOST` when
-that's set, which must accept `admin`/`admin`. The tests create and delete
-zones and change settings, so they ignore `TECHNITIUM_HOST` and never touch
-the server you manage. If a run is killed, `make testacc-clean`
-removes the containers it left behind.
+`make test-integration` needs Docker. It starts one container of the image
+named by `technitium.Version`, runs every test in `tests/examples` against
+it, and removes it. The tests create and delete zones and change settings,
+so they ignore `TECHNITIUM_HOST` and `TECHNITIUM_TOKEN` and never touch the
+server you manage. If a run is killed, `make testacc-clean` removes the
+containers it left behind. See [tests/README.md](tests/README.md) for
+running one test, coverage and adding a test.
 
-`make testacc-tofu` sets `TF_ACC_TERRAFORM_PATH` to `tofu`. When that path
-points at OpenTofu, the tests set `TF_ACC_PROVIDER_HOST` to
+`make test-integration TF=tofu` runs them with OpenTofu. It sets
+`TF_ACC_TERRAFORM_PATH` to `tofu` and `TF_ACC_PROVIDER_HOST` to
 `registry.opentofu.org`, because OpenTofu resolves `ilijamt/technitium` there.
 
 To test another version, point `TF_ACC_TERRAFORM_PATH` at its binary, for
-example `TF_ACC_TERRAFORM_PATH=/path/to/terraform-1.5.7 make testacc`. Run
-the oldest supported versions (Terraform 1.5, OpenTofu 1.6) and the newest
-before a release. Tests that need a newer version call `skipBelow` and skip
-with the reason.
+example `TF_ACC_TERRAFORM_PATH=/path/to/terraform-1.5.7 make test-integration`.
+When that path runs OpenTofu, the tests set the provider host themselves. Run the oldest supported
+versions (Terraform 1.5, OpenTofu 1.6) and the newest before a release.
+Tests that need a newer version skip with the reason.
 
 Run `make generate` and commit `docs/` after changing a schema, an example
 or a template.
@@ -57,7 +57,7 @@ Moving to a new Technitium release
 
 `technitium.Version` in
 [internal/technitium/version.go](internal/technitium/version.go) is the release
-the resources follow and the image `make testacc` runs.
+the resources follow and the image `make test-integration` runs.
 
 1. Diff `APIDOCS.md` between the two tags, for example
    `https://github.com/TechnitiumSoftware/DnsServer/compare/v15.6.1...<new>`.
@@ -65,4 +65,4 @@ the resources follow and the image `make testacc` runs.
    compare the routes the server registers in
    `DnsServerCore/DnsWebService.cs`.
 2. Update the specs in `internal/technitium` for the parameters that changed.
-3. Bump `Version`, then run `make generate` and `make testacc`.
+3. Bump `Version`, then run `make generate` and `make test-integration`.

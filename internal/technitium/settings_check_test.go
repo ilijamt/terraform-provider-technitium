@@ -30,7 +30,7 @@ func TestCheckLocalEndPoints(t *testing.T) {
 }
 
 // TFTECH-126: the values whose change restarts the web service, as
-// TestAccSideSettingsRestarts finds. The ones that restart only the DNS
+// TestIntegration_SideSettingsRestarts in tests/examples finds. The ones that restart only the DNS
 // service are left out: the HTTP API stays up through that.
 func TestSettingsRestarts(t *testing.T) {
 	got := map[string][]string{}

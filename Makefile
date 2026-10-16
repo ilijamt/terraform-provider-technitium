@@ -3,6 +3,16 @@ default: generate build
 BIN := ./build/terraform-provider-technitium
 MODULE := github.com/ilijamt/terraform-provider-technitium
 
+TF ?= terraform
+
+# OpenTofu needs TF_ACC_PROVIDER_HOST too. tests/examples sets it when
+# TF_ACC_TERRAFORM_PATH runs tofu, but it is set here as well, as in AWX.
+ifeq ($(notdir $(TF)),tofu)
+TF_ACC_ENV := TF_ACC_TERRAFORM_PATH=$(shell command -v $(TF)) TF_ACC_PROVIDER_HOST=registry.opentofu.org
+else
+TF_ACC_ENV :=
+endif
+
 GIT_VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo SNAPSHOT)
 STAMP := -X $(MODULE)/version.Version=$(GIT_VERSION) -X $(MODULE)/version.Commit=$(GIT_COMMIT)
@@ -23,21 +33,23 @@ build:
 test:
 	go test ./... -count=1 -cover
 
-# Runs the acceptance tests with Terraform against a technitium/dns-server
-# container matching technitium.Version (needs Docker), or against
-# TECHNITIUM_TESTACC_HOST when set.
-.PHONY: testacc
-testacc:
-	@mkdir -p build
-	TF_ACC=1 go test ./... -count=1 -timeout 15m -coverpkg=./internal/... -coverprofile=build/coverage.out
-	go tool cover -func=build/coverage.out | tail -1
+# Runs tests/examples against a technitium/dns-server container it starts
+# and removes (needs Docker). TF=tofu runs them with OpenTofu.
+.PHONY: test-integration
+test-integration:
+	$(TF_ACC_ENV) TF_ACC=1 go test -tags=integration ./tests/... -run '^TestIntegration_' -count=1 -timeout 15m -v
 
-# Runs the acceptance tests with OpenTofu instead of Terraform.
-.PHONY: testacc-tofu
-testacc-tofu:
-	TF_ACC_TERRAFORM_PATH="$$(command -v tofu)" $(MAKE) testacc
+# Same run, writing coverage data into COVERDIR.
+COVERDIR ?= build/covdata-integration
 
-# Removes acceptance test containers left behind by a killed or timed-out run.
+.PHONY: test-integration-cover
+test-integration-cover:
+	@mkdir -p $(COVERDIR)
+	$(TF_ACC_ENV) TF_ACC=1 go test -tags=integration ./tests/... -run '^TestIntegration_' -count=1 -timeout 15m -v \
+		-cover -coverpkg=./internal/... \
+		-args -test.gocoverdir=$(abspath $(COVERDIR))
+
+# Removes integration test containers left behind by a killed or timed-out run.
 .PHONY: testacc-clean
 testacc-clean:
 	@ids=$$(docker ps --all --quiet --filter label=terraform-provider-technitium.testacc); [ -z "$$ids" ] || docker rm --force $$ids
@@ -46,12 +58,15 @@ testacc-clean:
 fmt:
 	gofmt -w .
 	terraform fmt -recursive examples
+	terraform fmt -recursive tests
 
 .PHONY: lint
 lint:
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
 	terraform fmt -check -recursive examples
+	terraform fmt -check -recursive tests
 	go vet ./...
+	go vet -tags=integration ./tests/...
 	golangci-lint run ./...
 
 .PHONY: check

@@ -3,7 +3,6 @@ package testserver
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -15,26 +14,28 @@ import (
 const (
 	Username = "admin"
 	Password = "admin"
-	// Label marks the containers Start runs, so ones leaked by a killed test
+	// Label marks the containers Launch runs, so ones leaked by a killed test
 	// binary can be found and removed (make testacc-clean).
 	Label = "terraform-provider-technitium.testacc"
 )
 
-// Start uses the server at TECHNITIUM_TESTACC_HOST, which must accept
-// Username and Password, or else runs one in Docker. It never reads
-// TECHNITIUM_HOST, which may point at a real server the tests would change.
-func Start(ctx context.Context) (host string, stop func(), err error) {
-	if host = os.Getenv("TECHNITIUM_TESTACC_HOST"); host != "" {
-		return host, func() {}, nil
-	}
-	host, _, stop, err = Run(ctx)
-	return host, stop, err
+// Container is a server that Launch started.
+type Container struct {
+	// ID names the container for docker exec.
+	ID string
+	// Host is the web service's address on 127.0.0.1.
+	Host string
+	// IP is the container's address on the Docker bridge network.
+	IP string
+	// Ports are the extra ports, each published on the same port of 127.0.0.1.
+	Ports []int
+	// Stop removes the container.
+	Stop func()
 }
 
-// Run also returns the container's IP on the Docker bridge network, where
-// other containers reach it. Each of ports is also published on the same
+// Launch runs a server in Docker. Each of ports is also published on the same
 // port of 127.0.0.1, for a test that moves a service there.
-func Run(ctx context.Context, ports ...int) (host, ip string, stop func(), err error) {
+func Launch(ctx context.Context, ports ...int) (*Container, error) {
 	args := []string{"run", "--detach", "--rm", "--label", Label, "--publish", "127.0.0.1::5380"}
 	for _, p := range ports {
 		args = append(args, "--publish", fmt.Sprintf("127.0.0.1:%d:%d", p, p))
@@ -42,31 +43,31 @@ func Run(ctx context.Context, ports ...int) (host, ip string, stop func(), err e
 	args = append(args, "--env", "DNS_SERVER_ADMIN_PASSWORD="+Password, "technitium/dns-server:"+technitium.Version)
 	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
-		return "", "", nil, fmt.Errorf("docker run: %w", exitErr(err))
+		return nil, fmt.Errorf("docker run: %w", exitErr(err))
 	}
 	id := strings.TrimSpace(string(out))
-	stop = func() { _ = exec.Command("docker", "rm", "--force", id).Run() }
+	c := &Container{ID: id, Ports: ports, Stop: func() { _ = exec.Command("docker", "rm", "--force", id).Run() }}
 
 	out, err = exec.CommandContext(ctx, "docker", "port", id, "5380/tcp").Output()
 	if err != nil {
-		stop()
-		return "", "", nil, fmt.Errorf("docker port: %w", exitErr(err))
+		c.Stop()
+		return nil, fmt.Errorf("docker port: %w", exitErr(err))
 	}
 	addr, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	host = "http://" + addr
+	c.Host = "http://" + addr
 
 	out, err = exec.CommandContext(ctx, "docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", id).Output()
 	if err != nil {
-		stop()
-		return "", "", nil, fmt.Errorf("docker inspect: %w", exitErr(err))
+		c.Stop()
+		return nil, fmt.Errorf("docker inspect: %w", exitErr(err))
 	}
-	ip = strings.TrimSpace(string(out))
+	c.IP = strings.TrimSpace(string(out))
 
-	if err = wait(ctx, host); err != nil {
-		stop()
-		return "", "", nil, err
+	if err = wait(ctx, c.Host); err != nil {
+		c.Stop()
+		return nil, err
 	}
-	return host, ip, stop, nil
+	return c, nil
 }
 
 func wait(ctx context.Context, host string) error {
