@@ -2,6 +2,8 @@ module github.com/ilijamt/terraform-provider-technitium
 
 go 1.26.0
 
+toolchain go1.27.2
+
 require (
 	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/hcl/v2 v2.24.0
