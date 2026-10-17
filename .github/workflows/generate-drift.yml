@@ -1,0 +1,41 @@
+name: Generate drift check
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      # tfplugindocs needs a terraform binary to read the provider schema.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - name: Run make generate
+        run: make generate
+      - name: Run go mod tidy
+        run: go mod tidy
+      - name: Verify no drift
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::make generate or go mod tidy produced changes. Commit them."
+            git status --short
+            exit 1
+          fi

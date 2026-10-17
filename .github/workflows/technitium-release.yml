@@ -1,0 +1,38 @@
+name: Technitium release watch
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Open an issue when a newer technitium/dns-server image exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^const Version = "\(.*\)"/\1/p' internal/technitium/version.go)"
+          latest="$(curl -sSf 'https://hub.docker.com/v2/repositories/technitium/dns-server/tags?page_size=100&ordering=last_updated' \
+            | jq -r '.results[].name | select(test("^[0-9]+(\\.[0-9]+)+$"))' | sort -V | tail -n1)"
+          echo "current ${current}, latest ${latest}"
+          if [ -z "${latest}" ] || [ "$(printf '%s\n%s\n' "${current}" "${latest}" | sort -V | tail -n1)" = "${current}" ]; then
+            echo "Up to date."
+            exit 0
+          fi
+          title="Technitium ${latest} is available"
+          if gh issue list --state all --search "in:title \"${title}\"" --json title --jq '.[].title' | grep -qxF "${title}"; then
+            echo "Issue already exists."
+            exit 0
+          fi
+          gh issue create --title "${title}" --body "technitium/dns-server:${latest} is on Docker Hub; the provider follows ${current}.
+
+          Diff APIDOCS.md between the tags (https://github.com/TechnitiumSoftware/DnsServer/compare/v${current}...v${latest}), update the specs, bump technitium.Version, then run make generate and make test-integration under Terraform and OpenTofu. CONTRIBUTING.md has the steps."

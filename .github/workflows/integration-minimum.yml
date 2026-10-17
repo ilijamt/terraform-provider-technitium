@@ -1,0 +1,50 @@
+name: Integration minimum versions
+
+on:
+  schedule:
+    - cron: '41 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Integration / ${{ matrix.tool }} ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: terraform
+            version: 1.5.7
+          - tool: tofu
+            version: 1.6.3
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Setup Terraform
+        if: matrix.tool == 'terraform'
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ matrix.version }}
+          terraform_wrapper: false
+      - name: Setup OpenTofu
+        if: matrix.tool == 'tofu'
+        uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: ${{ matrix.version }}
+          tofu_wrapper: false
+      - name: Integration tests
+        run: make test-integration TF=${{ matrix.tool }}
+      - name: Remove leftover test containers
+        if: always()
+        run: make testacc-clean
