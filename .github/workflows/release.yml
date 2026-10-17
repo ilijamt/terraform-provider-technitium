@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,6 +35,8 @@ jobs:
           go-version-file: 'go.mod'
       - name: Unit tests
         run: go test ./... -count=1
+      - name: Install syft for the SBOMs
+        uses: anchore/sbom-action/download-syft@v0
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v7
         id: import_gpg
@@ -47,6 +51,11 @@ jobs:
         env:
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Verify with: gh attestation verify <zip> -R ilijamt/terraform-provider-technitium
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: 'dist/*.zip'
       # GoReleaser publishes a draft so this is the only `release.published`
       # webhook GitHub sends: the Terraform Registry scans once, after every
       # platform zip, SHA256SUMS and .sig is already attached. Drafts are not
