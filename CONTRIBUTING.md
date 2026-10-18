@@ -60,7 +60,7 @@ Moving to a new Technitium release
 the resources follow and the image `make test-integration` runs.
 
 1. Diff `APIDOCS.md` between the two tags, for example
-   `https://github.com/TechnitiumSoftware/DnsServer/compare/v15.6.1...<new>`.
+   `https://github.com/TechnitiumSoftware/DnsServer/compare/v15.6.2...<new>`.
    `APIDOCS.md` leaves out some calls (LDAP is only in the code), so also
    compare the routes the server registers in
    `DnsServerCore/DnsWebService.cs`.

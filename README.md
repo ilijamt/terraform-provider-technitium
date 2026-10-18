@@ -4,7 +4,7 @@ Technitium Terraform Provider
 A Terraform and OpenTofu provider for
 [Technitium DNS Server](https://technitium.com/dns/), built on its
 [HTTP API](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md).
-It supports Technitium 15.6.1, Terraform 1.5 or later and OpenTofu 1.6 or
+It supports Technitium 15.6.2, Terraform 1.5 or later and OpenTofu 1.6 or
 later. The acceptance tests pass on Terraform 1.5.7 and 1.16.6 and on
 OpenTofu 1.6.3 and 1.13.1. The export test needs `removed` blocks, so it only
 runs on Terraform 1.7 and OpenTofu 1.10 or later.

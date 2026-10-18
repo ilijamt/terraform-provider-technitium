@@ -1,3 +1,3 @@
 package technitium
 
-const Version = "15.6.1"
+const Version = "15.6.2"
