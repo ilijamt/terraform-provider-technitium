@@ -15,7 +15,7 @@ require (
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
 	github.com/stretchr/testify v1.12.1
 	github.com/zclconf/go-cty v1.19.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 )
 
 require (
